@@ -39,6 +39,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Assemble importer
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat importer_parts/part*.py > polk_importer.py
+          python -m py_compile polk_importer.py
+          test -s polk_importer.py
+          echo "Importer assembled: $(wc -l < polk_importer.py) lines"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

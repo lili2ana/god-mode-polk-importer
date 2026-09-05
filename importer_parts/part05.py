@@ -48,9 +48,16 @@ def verify_all_stages(conn):
 # --------------------------------------------------------------------------
 
 def get_db_connection():
-    db_url = os.environ.get("SUPABASE_DB_URL")
+    raw = os.environ.get("SUPABASE_DB_URL", "")
+    db_url = raw.strip().strip('"').strip("'")
+    if db_url.startswith("SUPABASE_DB_URL="):
+        db_url = db_url.split("=", 1)[1].strip().strip('"').strip("'")
     if not db_url:
         raise RuntimeError("SUPABASE_DB_URL is not set (direct Postgres connection string).")
+    if not (db_url.startswith("postgresql://") or db_url.startswith("postgres://")):
+        raise RuntimeError(
+            "SUPABASE_DB_URL must be the full Postgres connection URI from Supabase, beginning with postgresql:// or postgres://."
+        )
     if psycopg2 is None:
         raise RuntimeError("psycopg2 not installed. Run: pip install psycopg2-binary")
     return psycopg2.connect(db_url)

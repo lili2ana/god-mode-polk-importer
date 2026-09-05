@@ -69,6 +69,36 @@ jobs:
             *) echo "Refusing to run: SUPABASE_DB_URL does not identify project bnsmnztxkqmphvbikaxh"; exit 3 ;;
           esac
 
+      - name: Probe official Polk owner feed endpoints
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[probe-owner]') }}
+        shell: bash
+        run: |
+          set -u
+          urls=(
+            "https://ftp.polkflpa.gov/AppraisalData/ftp_owner.zip"
+            "https://ftp.polkflpa.gov/Appraisal%20Data/ftp_owner.zip"
+            "ftp://ftp.polkflpa.gov/AppraisalData/ftp_owner.zip"
+          )
+          i=0
+          for u in "${urls[@]}"; do
+            i=$((i+1))
+            echo "=== candidate $i: $u ==="
+            rm -f candidate.bin
+            if curl -L --fail --show-error --max-time 90 --output candidate.bin "$u"; then
+              echo "bytes=$(stat -c%s candidate.bin)"
+              file candidate.bin || true
+              printf "magic="; head -c 4 candidate.bin | od -An -tx1 | tr -d ' \n'; echo
+              if python - <<'PY'
+import zipfile
+p='candidate.bin'
+print('zip_valid=', zipfile.is_zipfile(p))
+PY
+              then :; fi
+            else
+              echo "fetch_failed"
+            fi
+          done
+
       - name: Preflight database identity and counts
         shell: bash
         run: |

@@ -88,12 +88,7 @@ jobs:
               echo "bytes=$(stat -c%s candidate.bin)"
               file candidate.bin || true
               printf "magic="; head -c 4 candidate.bin | od -An -tx1 | tr -d ' \n'; echo
-              if python - <<'PY'
-import zipfile
-p='candidate.bin'
-print('zip_valid=', zipfile.is_zipfile(p))
-PY
-              then :; fi
+              python -c "import zipfile; print('zip_valid=', zipfile.is_zipfile('candidate.bin'))"
             else
               echo "fetch_failed"
             fi

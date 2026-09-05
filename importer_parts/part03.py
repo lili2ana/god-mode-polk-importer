@@ -15,21 +15,41 @@ def download_with_retries(url: str, dest: Path) -> Path:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             log.info("Downloading (attempt %d/%d): %s", attempt, MAX_RETRIES, url)
-            with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("content-length", 0))
+            if url.startswith("ftps://"):
+                from ftplib import FTP_TLS
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                ftp = FTP_TLS(timeout=DOWNLOAD_TIMEOUT)
+                ftp.connect(parsed.hostname, parsed.port or 21)
+                ftp.login("anonymous", "anonymous@")
+                ftp.prot_p()
+                remote_path = parsed.path
                 written = 0
                 with open(tmp_dest, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                        if chunk:
-                            f.write(chunk)
-                            written += len(chunk)
-                if total and written != total:
-                    raise IOError(f"Incomplete download: got {written} of {total} bytes")
+                    def _write(chunk):
+                        nonlocal written
+                        f.write(chunk)
+                        written += len(chunk)
+                    ftp.retrbinary(f"RETR {remote_path}", _write, blocksize=DOWNLOAD_CHUNK_SIZE)
+                ftp.quit()
+                if written == 0:
+                    raise IOError("FTPS download returned 0 bytes")
+            else:
+                with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as resp:
+                    resp.raise_for_status()
+                    total = int(resp.headers.get("content-length", 0))
+                    written = 0
+                    with open(tmp_dest, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                            if chunk:
+                                f.write(chunk)
+                                written += len(chunk)
+                    if total and written != total:
+                        raise IOError(f"Incomplete download: got {written} of {total} bytes")
             tmp_dest.rename(dest)
             log.info("Downloaded %s (%.1f MB)", dest.name, dest.stat().st_size / 1e6)
             return dest
-        except (requests.RequestException, IOError) as e:
+        except Exception as e:
             log.warning("Download failed (attempt %d): %s", attempt, e)
             if attempt == MAX_RETRIES:
                 raise

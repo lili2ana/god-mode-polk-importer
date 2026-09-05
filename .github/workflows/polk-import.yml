@@ -70,7 +70,10 @@ jobs:
           esac
 
       - name: Preflight database identity and counts
-        run: python polk_importer.py --verify-only | tee preflight.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --verify-only | tee preflight.log
 
       - name: Verify only
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'verify-only' }}
@@ -78,25 +81,39 @@ jobs:
 
       - name: Dry-run owner
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'dry-run-owner' }}
-        run: python polk_importer.py --only owner --partitions "${{ inputs.partitions }}" --dry-run | tee importer.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --only owner --partitions "${{ inputs.partitions }}" --dry-run | tee importer.log
 
       - name: Import owner
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'owner') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-owner]')) }}
-        run: python polk_importer.py --only owner --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --only owner --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
 
       - name: Import legal
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'legal') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-legal]')) }}
-        run: python polk_importer.py --only legal --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --only legal --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
 
       - name: Full sequence
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'full' }}
+        shell: bash
         run: |
+          set -euo pipefail
           echo "Full sequence will still fail closed while any feed mapping_verified=False."
           python polk_importer.py --partitions "${{ inputs.partitions }}" | tee importer.log
 
       - name: Postflight database counts
         if: ${{ always() }}
-        run: python polk_importer.py --verify-only | tee postflight.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --verify-only | tee postflight.log
 
       - name: Upload verification evidence
         if: ${{ always() }}

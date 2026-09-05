@@ -1,0 +1,101 @@
+name: Polk Bulk Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Safe operation to run"
+        required: true
+        default: "owner"
+        type: choice
+        options:
+          - verify-only
+          - owner
+          - legal
+          - dry-run-owner
+          - full
+      partitions:
+        description: "Stable-hash shard count"
+        required: true
+        default: "32"
+        type: string
+
+concurrency:
+  group: polk-bulk-import-production
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      POLK_IMPORT_WORKDIR: ${{ github.workspace }}/.polk_import
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Require Supabase secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
+          case "$SUPABASE_DB_URL" in
+            *bnsmnztxkqmphvbikaxh*) ;;
+            *) echo "Refusing to run: SUPABASE_DB_URL does not identify project bnsmnztxkqmphvbikaxh"; exit 3 ;;
+          esac
+
+      - name: Preflight database identity and counts
+        run: python polk_importer.py --verify-only | tee preflight.log
+
+      - name: Verify only
+        if: ${{ inputs.action == 'verify-only' }}
+        run: echo "Verification-only run complete."
+
+      - name: Dry-run owner
+        if: ${{ inputs.action == 'dry-run-owner' }}
+        run: python polk_importer.py --only owner --partitions "${{ inputs.partitions }}" --dry-run | tee importer.log
+
+      - name: Import owner
+        if: ${{ inputs.action == 'owner' }}
+        run: python polk_importer.py --only owner --partitions "${{ inputs.partitions }}" | tee importer.log
+
+      - name: Import legal
+        if: ${{ inputs.action == 'legal' }}
+        run: python polk_importer.py --only legal --partitions "${{ inputs.partitions }}" | tee importer.log
+
+      - name: Full sequence
+        if: ${{ inputs.action == 'full' }}
+        run: |
+          echo "Full sequence will still fail closed while any feed mapping_verified=False."
+          python polk_importer.py --partitions "${{ inputs.partitions }}" | tee importer.log
+
+      - name: Postflight database counts
+        if: ${{ always() }}
+        run: python polk_importer.py --verify-only | tee postflight.log
+
+      - name: Upload verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: polk-import-evidence-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 30
+          path: |
+            preflight.log
+            importer.log
+            postflight.log
+            .polk_import/verified/*.verified

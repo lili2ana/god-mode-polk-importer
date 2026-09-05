@@ -18,11 +18,6 @@ class FeedStage:
             self.stage_table = f"{self.table}_stage"
 
 
-# TODO: replace url / columns / conflict_key with real values.
-# Table names follow the _v2 convention you're running against
-# (polk_owner_v2 / polk_owner_stage_v2, etc). If a feed's production
-# tables aren't actually versioned this way yet, override table=/stage_table=
-# for that entry explicitly.
 def _v2_names(base: str) -> tuple[str, str]:
     return f"polk_{base}_v2", f"polk_{base}_stage_v2"
 
@@ -30,7 +25,7 @@ def _v2_names(base: str) -> tuple[str, str]:
 FEEDS: dict[str, FeedStage] = {
     "owner": FeedStage(
         name="owner",
-        url="https://www.polkflpa.gov/FTPPage/downloader.ashx?dir=%5CAppraisalData%5C&filename=ftp_owner.zip",
+        url="https://ftp.polkflpa.gov/AppraisalData/ftp_owner.zip",
         table=_v2_names("owner")[0],
         stage_table=_v2_names("owner")[1],
         columns=["parcel_id", "ln_num", "name", "pctown", "mailto", "addr_1", "addr_2", "addr_3", "city", "state", "zip"],

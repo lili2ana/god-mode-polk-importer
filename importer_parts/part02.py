@@ -2,11 +2,11 @@
 class FeedStage:
     name: str
     url: str
-    table: str                     # production table
-    columns: list[str]             # column order in source file == column order in stage table
+    table: str
+    columns: list[str]
     conflict_key: list[str] = field(default_factory=lambda: ["parcel_id"])
-    mapping_verified: bool = False # block production writes until source header + conflict key are verified
-    stage_table: Optional[str] = None   # defaults to f"{table}_stage"
+    mapping_verified: bool = False
+    stage_table: Optional[str] = None
     is_fixed_width: bool = False
     fixed_width_spec: Optional[list[tuple[int, int]]] = None
     delimiter: str = ","
@@ -25,7 +25,7 @@ def _v2_names(base: str) -> tuple[str, str]:
 FEEDS: dict[str, FeedStage] = {
     "owner": FeedStage(
         name="owner",
-        url="https://ftp.polkflpa.gov/AppraisalData/ftp_owner.zip",
+        url="ftps://ftp.polkflpa.gov/AppraisalData/ftp_owner.zip",
         table=_v2_names("owner")[0],
         stage_table=_v2_names("owner")[1],
         columns=["parcel_id", "ln_num", "name", "pctown", "mailto", "addr_1", "addr_2", "addr_3", "city", "state", "zip"],

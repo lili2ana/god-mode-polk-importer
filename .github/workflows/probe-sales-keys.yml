@@ -1,0 +1,63 @@
+name: Probe Polk Sales Keys
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - probe_sales_keys.py
+      - .github/workflows/probe-sales-keys.yml
+  workflow_dispatch:
+
+concurrency:
+  group: polk-sales-key-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Require Supabase secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
+          case "$SUPABASE_DB_URL" in
+            *bnsmnztxkqmphvbikaxh*) ;;
+            *) echo "Refusing to probe: wrong Supabase project"; exit 3 ;;
+          esac
+
+      - name: Probe sales multiline reconstruction and keys
+        shell: bash
+        run: |
+          set -euo pipefail
+          python probe_sales_keys.py | tee sales_keys_probe.log
+
+      - name: Upload probe evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sales-keys-probe-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: ignore
+          path: |
+            sales_keys_probe.log
+            ftp_sales.zip

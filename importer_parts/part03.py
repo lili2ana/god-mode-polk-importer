@@ -100,14 +100,13 @@ def _strip_outer_csv_quotes(value: str) -> str:
 
 
 def _iter_legal_rows(stage: FeedStage, data_file: Path):
-    """Parse Polk legal rows using the confirmed seven-field structural boundary.
+    """Parse Polk legal rows using the verified seven-field structural boundary.
 
     Polk's DSCR field contains unescaped survey seconds/inch marks such as 10" E.
     A standards-based CSV reader can therefore merge physical records or split DSCR
     into extra fields. The first seven source fields are coded identifiers and contain
     no commas; split each physical record at only the first seven commas, then preserve
-    the entire remaining tail as DSCR. Fail closed if the structural boundary is not
-    exactly seven fields plus one description tail.
+    the entire remaining tail as DSCR. Fail closed if the structural boundary changes.
     """
     expected = len(stage.columns)
     if expected != 8:
@@ -135,6 +134,10 @@ def _iter_legal_rows(stage: FeedStage, data_file: Path):
             if any(',' in v for v in structural):
                 raise ValueError(
                     f"legal structural field contains comma at physical line {physical_line_no}: {structural!r}"
+                )
+            if not all(v.isdigit() for v in structural):
+                raise ValueError(
+                    f"legal structural field is not coded/numeric at physical line {physical_line_no}: {structural!r}"
                 )
             dscr = _strip_outer_csv_quotes(parts[7])
             row = tuple(structural + [dscr])

@@ -67,6 +67,7 @@ FEEDS: dict[str, FeedStage] = {
         columns=["parcel_id", "num", "section", "township", "range", "sub", "parcel", "dscr"],
         conflict_key=["parcel_id", "num"],
         mapping_verified=True,
+        encoding="cp1252",
     ),
     "parcel-tax": FeedStage(
         name="parcel-tax",

@@ -74,6 +74,8 @@ def iter_source_rows(stage: FeedStage, data_file: Path):
     """Yield one normalized row (tuple) at a time, in stage.columns order."""
     if stage.is_fixed_width:
         yield from _iter_fixed_width_rows(stage, data_file)
+    elif stage.name == "legal":
+        yield from _iter_legal_rows(stage, data_file)
     else:
         yield from _iter_delimited_rows(stage, data_file)
 
@@ -88,6 +90,57 @@ def _iter_delimited_rows(stage: FeedStage, data_file: Path):
                 continue
             row = (row + [""] * len(stage.columns))[: len(stage.columns)]
             yield tuple(row)
+
+
+def _strip_outer_csv_quotes(value: str) -> str:
+    value = value.rstrip("\r\n")
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        return value[1:-1]
+    return value.strip('"')
+
+
+def _iter_legal_rows(stage: FeedStage, data_file: Path):
+    """Parse Polk legal rows using the confirmed seven-field structural boundary.
+
+    Polk's DSCR field contains unescaped survey seconds/inch marks such as 10" E.
+    A standards-based CSV reader can therefore merge physical records or split DSCR
+    into extra fields. The first seven source fields are coded identifiers and contain
+    no commas; split each physical record at only the first seven commas, then preserve
+    the entire remaining tail as DSCR. Fail closed if the structural boundary is not
+    exactly seven fields plus one description tail.
+    """
+    expected = len(stage.columns)
+    if expected != 8:
+        raise ValueError(f"legal parser expects 8 configured columns, got {expected}")
+
+    with open(data_file, "r", encoding=stage.encoding, newline="") as f:
+        if stage.has_header:
+            header_line = f.readline()
+            header_parts = header_line.rstrip("\r\n").split(",", 7)
+            header = tuple(_strip_outer_csv_quotes(v) for v in header_parts)
+            expected_header = tuple(c.upper() for c in stage.columns)
+            if header != expected_header:
+                raise ValueError(f"legal header mismatch: {header!r} != {expected_header!r}")
+
+        for physical_line_no, line in enumerate(f, start=2 if stage.has_header else 1):
+            if not line.strip():
+                continue
+            parts = line.rstrip("\r\n").split(",", 7)
+            if len(parts) != 8:
+                raise ValueError(
+                    f"legal structural parse failure at physical line {physical_line_no}: "
+                    f"expected 7 structural fields + DSCR tail, got {len(parts)} pieces"
+                )
+            structural = [_strip_outer_csv_quotes(v) for v in parts[:7]]
+            if any(',' in v for v in structural):
+                raise ValueError(
+                    f"legal structural field contains comma at physical line {physical_line_no}: {structural!r}"
+                )
+            dscr = _strip_outer_csv_quotes(parts[7])
+            row = tuple(structural + [dscr])
+            if len(row) != 8:
+                raise AssertionError(f"legal normalized width != 8 at physical line {physical_line_no}")
+            yield row
 
 
 def _iter_fixed_width_rows(stage: FeedStage, data_file: Path):

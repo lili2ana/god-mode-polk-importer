@@ -21,7 +21,7 @@ jobs:
           python - <<'PY'
           from ftplib import FTP_TLS
           from pathlib import Path
-          import csv, io, json, zipfile, collections, re
+          import csv, io, json, zipfile, collections
 
           host='ftp.polkflpa.gov'
           remote='/AppraisalData/ftp_legal.zip'
@@ -38,12 +38,12 @@ jobs:
 
           text=raw_bytes.decode('utf-8', errors='replace')
           physical=text.splitlines()
-          header=physical[0].split(',',7)
-          header=[v.strip('"') for v in header]
+          header=[v.strip('"') for v in physical[0].split(',',7)]
           expected=['PARCEL_ID','NUM','SECTION','TOWNSHIP','RANGE','SUB','PARCEL','DSCR']
           assert header == expected, (header, expected)
 
-          # Legacy standards-based CSV view, retained only to quantify the source defect.
+          # Standards-based CSV view, used only to quantify how unescaped quote marks
+          # corrupt logical record boundaries and field widths.
           legacy_reader=csv.reader(io.StringIO(text, newline=''), delimiter=',')
           next(legacy_reader)
           legacy_widths=collections.Counter()
@@ -63,8 +63,8 @@ jobs:
           composite_dups=0
           parcel_seen=set()
           dscr_quote_rows=0
-          max_legacy_width=0
-          max_legacy_sample=None
+          max_physical_legacy_width=0
+          max_physical_legacy_sample=None
 
           for line_no,line in enumerate(physical[1:], start=2):
               parts=line.split(',',7)
@@ -77,8 +77,6 @@ jobs:
                   structural_failures.append((line_no,'structural',structural))
                   continue
               pid,num,section,township,rng,sub,parcel=structural
-              # Fail closed on the structural boundary. These seven columns are coded data,
-              # never survey prose; if they stop looking coded, the assumption is broken.
               if not (pid.isdigit() and num.isdigit() and section.isdigit() and township.isdigit()
                       and rng.isdigit() and sub.isdigit() and parcel.isdigit()):
                   structural_failures.append((line_no,'noncoded',structural))
@@ -90,15 +88,17 @@ jobs:
                   composite_dups += 1
               else:
                   composite_seen.add(key)
-              if '"' in dscr[1:-1] if len(dscr)>=2 else '"' in dscr:
+              inner=dscr[1:-1] if len(dscr)>=2 else dscr
+              if '"' in inner:
                   dscr_quote_rows += 1
 
-              # Canary: independently parse this physical line with csv.reader and remember
-              # the single most extreme field explosion; verify our structural fields survive.
+              # Manual canary on the worst single physical line. The historical 22-field
+              # outlier was a multi-physical-line logical merge, so the correct full-feed
+              # canary is legacy_widths[22], not a >=22 width on one physical line.
               legacy=next(csv.reader([line], delimiter=','))
-              if len(legacy) > max_legacy_width:
-                  max_legacy_width=len(legacy)
-                  max_legacy_sample={
+              if len(legacy) > max_physical_legacy_width:
+                  max_physical_legacy_width=len(legacy)
+                  max_physical_legacy_sample={
                       'line_no':line_no,
                       'legacy_width':len(legacy),
                       'structural':structural,
@@ -119,8 +119,9 @@ jobs:
               'duplicate_composite_keys':composite_dups,
               'unique_parcel_ids':len(parcel_seen),
               'rows_with_quote_inside_dscr_tail':dscr_quote_rows,
-              'max_legacy_width':max_legacy_width,
-              'max_legacy_sample':max_legacy_sample,
+              'max_single_physical_line_legacy_width':max_physical_legacy_width,
+              'max_single_physical_line_sample':max_physical_legacy_sample,
+              'legacy_22_field_logical_records':legacy_widths.get(22,0),
               'first_structural_failures':structural_failures[:20],
           }
           Path('legal_parser_validation.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
@@ -130,7 +131,7 @@ jobs:
           assert normalized_rows == len(physical)-1
           assert composite_dups == 0
           assert len(parcel_seen) == 438628
-          assert max_legacy_width >= 22
+          assert legacy_widths.get(22,0) == 1
           PY
 
       - name: Upload parser validation

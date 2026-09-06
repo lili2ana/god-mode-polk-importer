@@ -99,39 +99,68 @@ jobs:
               raise SystemExit('parcel feed is not a valid ZIP')
 
           with zipfile.ZipFile(out) as zf:
-              infos = zf.infolist()
-              print('zip_members=', [(i.filename, i.file_size) for i in infos])
-              data_members = [i for i in infos if not i.is_dir()]
+              data_members = [i for i in zf.infolist() if not i.is_dir()]
               if not data_members:
                   raise SystemExit('ZIP contains no data file')
               member = data_members[0]
+              print('zip_member=', member.filename)
+              print('uncompressed_size=', member.file_size)
               with zf.open(member) as raw:
                   text = io.TextIOWrapper(raw, encoding='utf-8', errors='replace', newline='')
-                  sample_lines = []
-                  for _ in range(8):
-                      line = text.readline()
-                      if not line:
-                          break
-                      sample_lines.append(line.rstrip('\r\n'))
+                  reader = csv.reader(text, delimiter=',')
+                  header = next(reader)
+                  print('column_count=', len(header))
+                  print('header_fields=', header)
+                  parcel_idx = header.index('PARCEL_ID')
+                  strap_idx = header.index('PR_STRAP')
+                  row_count = 0
+                  bad_width = 0
+                  parcel_seen = set()
+                  parcel_dups = 0
+                  blank_parcel = 0
+                  strap_nonblank = 0
+                  strap_seen = set()
+                  strap_dups = 0
+                  samples = []
+                  for row in reader:
+                      row_count += 1
+                      if len(row) != len(header):
+                          bad_width += 1
+                          continue
+                      if len(samples) < 3:
+                          samples.append(row)
+                      pid = row[parcel_idx].strip()
+                      if not pid:
+                          blank_parcel += 1
+                      elif pid in parcel_seen:
+                          parcel_dups += 1
+                      else:
+                          parcel_seen.add(pid)
+                      strap = row[strap_idx].strip()
+                      if strap:
+                          strap_nonblank += 1
+                          if strap in strap_seen:
+                              strap_dups += 1
+                          else:
+                              strap_seen.add(strap)
 
-          print(f'data_member={member.filename}')
-          print('first_lines:')
-          for idx, line in enumerate(sample_lines, 1):
-              print(f'  {idx}: {line[:1500]}')
+          print('csv_data_rows=', row_count)
+          print('bad_width_rows=', bad_width)
+          print('unique_parcel_ids=', len(parcel_seen))
+          print('duplicate_parcel_id_rows=', parcel_dups)
+          print('blank_parcel_id_rows=', blank_parcel)
+          print('pr_strap_nonblank_rows=', strap_nonblank)
+          print('unique_pr_strap=', len(strap_seen))
+          print('duplicate_pr_strap_rows=', strap_dups)
+          for i, row in enumerate(samples, 1):
+              print(f'sample_row_{i}=', row)
 
-          sample_text = '\n'.join(sample_lines)
-          try:
-              dialect = csv.Sniffer().sniff(sample_text, delimiters=',|\t;')
-              delim = dialect.delimiter
-          except Exception:
-              delim = ','
-          print(f'detected_delimiter={repr(delim)}')
-          rows = list(csv.reader(sample_lines, delimiter=delim))
-          print('field_counts=', [len(r) for r in rows])
-          if rows:
-              print('header_fields=', rows[0])
-              for i, row in enumerate(rows[1:4], 1):
-                  print(f'sample_row_{i}=', row)
+          if len(header) != 36:
+              raise SystemExit(f'schema drift: expected 36 columns, got {len(header)}')
+          if bad_width:
+              raise SystemExit(f'schema drift: {bad_width} rows do not have 36 columns')
+          if blank_parcel:
+              raise SystemExit(f'key failure: {blank_parcel} rows have blank PARCEL_ID')
           PY
 
       - name: Preflight database identity and counts

@@ -54,26 +54,71 @@ def copy_shards_into_stage(conn, stage: FeedStage, shard_paths: list[Path]) -> i
     return total
 
 
-def merge_stage_into_production(conn, stage: FeedStage) -> int:
-    """Set-based INSERT ... ON CONFLICT DO UPDATE from stage table into
-    production table. One statement for the whole stage — no per-row
-    round trips."""
+def _build_merge_sql(stage: FeedStage, where_sql=None):
     update_cols = [c for c in stage.columns if c not in stage.conflict_key]
-
-    insert_sql = sql.SQL(
+    base = sql.SQL(
         "INSERT INTO {table} ({cols}) "
-        "SELECT {cols} FROM {stage_table} "
+        "SELECT {cols} FROM {stage_table} {where_clause} "
         "ON CONFLICT ({conflict}) DO UPDATE SET {updates}"
-    ).format(
+    )
+    return base.format(
         table=sql.Identifier(stage.table),
         cols=sql.SQL(", ").join(sql.Identifier(c) for c in stage.columns),
         stage_table=sql.Identifier(stage.stage_table),
+        where_clause=where_sql if where_sql is not None else sql.SQL(""),
         conflict=sql.SQL(", ").join(sql.Identifier(c) for c in stage.conflict_key),
         updates=sql.SQL(", ").join(
             sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(c)) for c in update_cols
         ),
     )
 
+
+def _merge_legal_in_prefix_chunks(conn, stage: FeedStage) -> int:
+    """Merge the million-row legal feed in small committed parcel-id ranges.
+
+    A single INSERT..SELECT over the full legal stage caused the Supabase database
+    connection to be terminated during production merge. Legal parcel IDs are numeric
+    coded strings, so use distinct 3-digit prefixes as non-overlapping lexicographic
+    ranges. Each range commits independently, bounding statement memory/WAL pressure
+    while preserving idempotent ON CONFLICT behavior.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL("SELECT DISTINCT left(parcel_id, 3) FROM {} ORDER BY 1").format(
+                sql.Identifier(stage.stage_table)
+            )
+        )
+        prefixes = [row[0] for row in cur.fetchall() if row[0]]
+
+    total = 0
+    for prefix in prefixes:
+        if not prefix.isdigit():
+            raise ValueError(f"legal merge prefix is not numeric: {prefix!r}")
+        upper = str(int(prefix) + 1).zfill(len(prefix))
+        where_clause = sql.SQL("WHERE parcel_id >= %s AND parcel_id < %s")
+        insert_sql = _build_merge_sql(stage, where_clause)
+        with conn.cursor() as cur:
+            cur.execute(insert_sql, (prefix, upper))
+            affected = cur.rowcount
+        conn.commit()
+        total += affected
+        log.info("  merged legal parcel prefix %s: %d rows", prefix, affected)
+
+    log.info("Merged %s -> %s in %d prefix chunks: %d rows upserted",
+             stage.stage_table, stage.table, len(prefixes), total)
+    return total
+
+
+def merge_stage_into_production(conn, stage: FeedStage) -> int:
+    """Set-based INSERT ... ON CONFLICT DO UPDATE from stage into production.
+
+    Most feeds use one statement. Legal uses committed prefix chunks because its
+    1M+ row merge exceeded the stable resource envelope of a single statement.
+    """
+    if stage.name == "legal":
+        return _merge_legal_in_prefix_chunks(conn, stage)
+
+    insert_sql = _build_merge_sql(stage)
     with conn.cursor() as cur:
         cur.execute(insert_sql)
         affected = cur.rowcount

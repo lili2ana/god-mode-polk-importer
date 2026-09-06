@@ -17,7 +17,6 @@
         status="verified",
     )
 
-    # Keep a local marker only as a per-run artifact; Supabase is the durable source of truth.
     marker = VERIFIED_MARKER_DIR / f"{stage.name}.verified"
     marker.write_text(
         f"staged_rows={staged_count}\nupserted_rows={upserted}\nprod_rows={prod_count}\n"
@@ -67,12 +66,7 @@ def run_stage_direct(stage_name: str, dry_run: bool, conn) -> dict:
 
 def ensure_writable_session(conn):
     """Force a fresh session-level read/write default, then verify the next
-    transaction is actually writable before any TRUNCATE/COPY/merge begins.
-
-    Supabase can remain default_transaction_read_only=on after a recovery event
-    even when pg_is_in_recovery() is already false.  The importer must fail
-    closed rather than discovering that state at the first destructive write.
-    """
+    transaction is actually writable before any TRUNCATE/COPY/merge begins."""
     previous_autocommit = conn.autocommit
     try:
         conn.autocommit = True
@@ -90,9 +84,6 @@ def ensure_writable_session(conn):
     finally:
         conn.autocommit = previous_autocommit
 
-    # This SELECT starts a brand-new transaction after the session default was
-    # changed.  Verify that transaction itself is read/write, then close it so
-    # the real write operation starts in a clean transaction.
     with conn.cursor() as cur:
         cur.execute(
             "SELECT current_setting('transaction_read_only'), "
@@ -111,12 +102,50 @@ def ensure_writable_session(conn):
         )
 
 
-def run_legal_merge_only(conn) -> dict:
-    """Recover a legal import from an already-validated staging table.
+def _legal_streaming_fingerprint(conn, table_name: str):
+    """Return a low-temp-space integrity fingerprint for the 8-column legal table.
 
-    This intentionally skips FTPS download, parsing, TRUNCATE and COPY.  It first
-    re-validates the live staging table against the exact hardened-parser
-    acceptance bar, then performs the idempotent committed prefix-chunk merge.
+    This deliberately avoids COUNT(DISTINCT ...) / GROUP BY because those caused
+    PostgreSQL to spill to pgsql_tmp and hit the database disk ceiling.  The hash
+    aggregate is a sequential scan with constant aggregate state, so it can be
+    compared stage-vs-production without a large sort/hash workspace.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                "SELECT count(*) AS rows, "
+                "count(*) FILTER (WHERE parcel_id IS NULL OR btrim(parcel_id) = '') AS blank_parcel, "
+                "count(*) FILTER (WHERE num IS NULL OR btrim(num) = '') AS blank_num, "
+                "min(parcel_id), max(parcel_id), "
+                "sum(hashtextextended(concat_ws(chr(31), "
+                "coalesce(parcel_id,''), coalesce(num,''), coalesce(section,''), "
+                "coalesce(township,''), coalesce(range,''), coalesce(sub,''), "
+                "coalesce(parcel,''), coalesce(dscr,'')), 0)::numeric) AS fingerprint "
+                "FROM {}"
+            ).format(sql.Identifier(table_name))
+        )
+        return cur.fetchone()
+
+
+def _legal_has_orphans(conn, table_name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM {} l "
+                "WHERE NOT EXISTS (SELECT 1 FROM polk_parcel_v2 p WHERE p.parcel_id = l.parcel_id) "
+                "LIMIT 1)"
+            ).format(sql.Identifier(table_name))
+        )
+        return cur.fetchone()[0]
+
+
+def run_legal_merge_only(conn) -> dict:
+    """Recover legal from the already-loaded, previously validated staging table.
+
+    No FTPS download, parser pass, TRUNCATE, or COPY is repeated.  Stage integrity
+    is rechecked with exact row/blank/orphan checks and a streaming content
+    fingerprint.  Production must finish at the same exact row count and fingerprint.
     """
     stage = FEEDS["legal"]
     expected_rows = 1_074_337
@@ -124,41 +153,21 @@ def run_legal_merge_only(conn) -> dict:
     if not table_exists(conn, stage.stage_table) or not table_exists(conn, stage.table):
         raise RuntimeError("Legal merge-only requires both legal v2 stage and production tables.")
 
-    with conn.cursor() as cur:
-        cur.execute(
-            sql.SQL(
-                "SELECT count(*) AS rows, "
-                "count(*) FILTER (WHERE parcel_id IS NULL OR btrim(parcel_id) = '') AS blank_parcel, "
-                "count(*) FILTER (WHERE num IS NULL OR btrim(num) = '') AS blank_num, "
-                "count(DISTINCT (parcel_id, num)) AS distinct_keys "
-                "FROM {}"
-            ).format(sql.Identifier(stage.stage_table))
-        )
-        staged_count, blank_parcel, blank_num, distinct_keys = cur.fetchone()
-        cur.execute(
-            sql.SQL(
-                "SELECT count(DISTINCT l.parcel_id) "
-                "FROM {} l LEFT JOIN polk_parcel_v2 p USING (parcel_id) "
-                "WHERE p.parcel_id IS NULL"
-            ).format(sql.Identifier(stage.stage_table))
-        )
-        orphan_parcels = cur.fetchone()[0]
+    staged_count, blank_parcel, blank_num, stage_min, stage_max, stage_fingerprint = \
+        _legal_streaming_fingerprint(conn, stage.stage_table)
+    stage_orphans = _legal_has_orphans(conn, stage.stage_table)
     conn.rollback()
 
     log.info(
-        "Legal stage revalidation: rows=%d distinct_keys=%d blank_parcel=%d blank_num=%d orphan_parcels=%d",
-        staged_count, distinct_keys, blank_parcel, blank_num, orphan_parcels,
+        "Legal stage revalidation: rows=%d blank_parcel=%d blank_num=%d orphans=%s min=%s max=%s fingerprint=%s",
+        staged_count, blank_parcel, blank_num, stage_orphans, stage_min, stage_max, stage_fingerprint,
     )
     if staged_count != expected_rows:
         raise RuntimeError(f"Legal stage row count drift: expected {expected_rows}, got {staged_count}")
-    if distinct_keys != expected_rows:
-        raise RuntimeError(
-            f"Legal stage composite-key drift: expected {expected_rows} unique keys, got {distinct_keys}"
-        )
-    if blank_parcel or blank_num or orphan_parcels:
+    if blank_parcel or blank_num or stage_orphans:
         raise RuntimeError(
             f"Legal stage integrity failure: blank_parcel={blank_parcel}, blank_num={blank_num}, "
-            f"orphan_parcels={orphan_parcels}"
+            f"orphans={stage_orphans}"
         )
 
     prod_before = row_count_of(conn, stage.table)
@@ -166,30 +175,26 @@ def run_legal_merge_only(conn) -> dict:
     log.info("Legal production rows before idempotent merge: %d", prod_before)
 
     upserted = merge_stage_into_production(conn, stage)
-    prod_count = row_count_of(conn, stage.table)
+
+    prod_count, prod_blank_parcel, prod_blank_num, prod_min, prod_max, prod_fingerprint = \
+        _legal_streaming_fingerprint(conn, stage.table)
+    prod_orphans = _legal_has_orphans(conn, stage.table)
     conn.rollback()
 
-    with conn.cursor() as cur:
-        cur.execute(
-            sql.SQL("SELECT count(DISTINCT (parcel_id, num)) FROM {}").format(
-                sql.Identifier(stage.table)
-            )
-        )
-        prod_distinct_keys = cur.fetchone()[0]
-        cur.execute(
-            sql.SQL(
-                "SELECT count(DISTINCT l.parcel_id) "
-                "FROM {} l LEFT JOIN polk_parcel_v2 p USING (parcel_id) "
-                "WHERE p.parcel_id IS NULL"
-            ).format(sql.Identifier(stage.table))
-        )
-        prod_orphans = cur.fetchone()[0]
-    conn.rollback()
-
-    if prod_count != expected_rows or prod_distinct_keys != expected_rows or prod_orphans != 0:
+    log.info(
+        "Legal production verification: rows=%d blank_parcel=%d blank_num=%d orphans=%s min=%s max=%s fingerprint=%s",
+        prod_count, prod_blank_parcel, prod_blank_num, prod_orphans, prod_min, prod_max, prod_fingerprint,
+    )
+    if prod_count != expected_rows:
+        raise RuntimeError(f"Legal post-merge row count failed: expected {expected_rows}, got {prod_count}")
+    if prod_blank_parcel or prod_blank_num or prod_orphans:
         raise RuntimeError(
-            f"Legal post-merge verification failed: prod={prod_count}, distinct_keys={prod_distinct_keys}, "
-            f"orphans={prod_orphans}; expected {expected_rows}/{expected_rows}/0"
+            f"Legal post-merge integrity failed: blank_parcel={prod_blank_parcel}, "
+            f"blank_num={prod_blank_num}, orphans={prod_orphans}"
+        )
+    if (prod_min, prod_max, prod_fingerprint) != (stage_min, stage_max, stage_fingerprint):
+        raise RuntimeError(
+            "Legal post-merge fingerprint mismatch between staging and production — refusing verification."
         )
 
     persist_feed_status(
@@ -205,7 +210,7 @@ def run_legal_merge_only(conn) -> dict:
     marker = VERIFIED_MARKER_DIR / "legal.verified"
     marker.write_text(
         f"staged_rows={staged_count}\nupserted_rows={upserted}\nprod_rows={prod_count}\n"
-        "source_of_truth=public.god_mode_feed_status\n"
+        f"fingerprint={prod_fingerprint}\nsource_of_truth=public.god_mode_feed_status\n"
     )
     log.info(
         "=== Legal merge-only verified persistently: staged=%d upserted=%d prod=%d ===",

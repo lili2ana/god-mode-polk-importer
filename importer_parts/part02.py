@@ -61,7 +61,7 @@ FEEDS: dict[str, FeedStage] = {
     ),
     "legal": FeedStage(
         name="legal",
-        url="https://www.polkflpa.gov/FTPPage/downloader.ashx?dir=%5CAppraisalData%5C&filename=ftp_legal.zip",
+        url="ftps://ftp.polkflpa.gov/AppraisalData/ftp_legal.zip",
         table=_v2_names("legal")[0],
         stage_table=_v2_names("legal")[1],
         columns=["parcel_id", "num", "section", "township", "range", "sub", "parcel", "dscr"],

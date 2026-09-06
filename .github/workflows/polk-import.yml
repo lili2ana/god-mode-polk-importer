@@ -69,6 +69,71 @@ jobs:
             *) echo "Refusing to run: SUPABASE_DB_URL does not identify project bnsmnztxkqmphvbikaxh"; exit 3 ;;
           esac
 
+      - name: Probe official Polk parcel feed schema
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[probe-parcel]') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee parcel_probe.log
+          from ftplib import FTP_TLS
+          from pathlib import Path
+          import csv, io, zipfile
+
+          host = 'ftp.polkflpa.gov'
+          remote = '/AppraisalData/ftp_parcel.zip'
+          out = Path('ftp_parcel.zip')
+
+          ftp = FTP_TLS(host, timeout=120)
+          ftp.login()
+          ftp.prot_p()
+          size = ftp.size(remote)
+          print(f'FTPS host={host}')
+          print(f'remote={remote}')
+          print(f'remote_size={size}')
+          with out.open('wb') as f:
+              ftp.retrbinary(f'RETR {remote}', f.write, blocksize=1024*1024)
+          ftp.quit()
+          print(f'downloaded_size={out.stat().st_size}')
+          print(f'zip_valid={zipfile.is_zipfile(out)}')
+          if not zipfile.is_zipfile(out):
+              raise SystemExit('parcel feed is not a valid ZIP')
+
+          with zipfile.ZipFile(out) as zf:
+              infos = zf.infolist()
+              print('zip_members=', [(i.filename, i.file_size) for i in infos])
+              data_members = [i for i in infos if not i.is_dir()]
+              if not data_members:
+                  raise SystemExit('ZIP contains no data file')
+              member = data_members[0]
+              with zf.open(member) as raw:
+                  text = io.TextIOWrapper(raw, encoding='utf-8', errors='replace', newline='')
+                  sample_lines = []
+                  for _ in range(8):
+                      line = text.readline()
+                      if not line:
+                          break
+                      sample_lines.append(line.rstrip('\r\n'))
+
+          print(f'data_member={member.filename}')
+          print('first_lines:')
+          for idx, line in enumerate(sample_lines, 1):
+              print(f'  {idx}: {line[:1500]}')
+
+          sample_text = '\n'.join(sample_lines)
+          try:
+              dialect = csv.Sniffer().sniff(sample_text, delimiters=',|\t;')
+              delim = dialect.delimiter
+          except Exception:
+              delim = ','
+          print(f'detected_delimiter={repr(delim)}')
+          rows = list(csv.reader(sample_lines, delimiter=delim))
+          print('field_counts=', [len(r) for r in rows])
+          if rows:
+              print('header_fields=', rows[0])
+              for i, row in enumerate(rows[1:4], 1):
+                  print(f'sample_row_{i}=', row)
+          PY
+
       - name: Preflight database identity and counts
         shell: bash
         run: |
@@ -126,4 +191,5 @@ jobs:
             preflight.log
             importer.log
             postflight.log
+            parcel_probe.log
             .polk_import/verified/*.verified

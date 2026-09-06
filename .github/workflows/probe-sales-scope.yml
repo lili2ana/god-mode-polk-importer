@@ -1,0 +1,33 @@
+name: Probe Residential Sales Scope
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_sales_scope.py'
+      - '.github/workflows/probe-sales-scope.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Require Supabase secret
+        run: |
+          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
+          case "$SUPABASE_DB_URL" in
+            *bnsmnztxkqmphvbikaxh*) ;;
+            *) echo "wrong Supabase project"; exit 3 ;;
+          esac
+      - name: Probe residential sales scope
+        run: python probe_sales_scope.py | tee sales_scope_probe.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sales-scope-probe-${{ github.run_id }}
+          path: sales_scope_probe.log
+          retention-days: 30

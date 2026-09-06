@@ -164,6 +164,120 @@ jobs:
               raise SystemExit(f'key failure: {blank_parcel} rows have blank PARCEL_ID')
           PY
 
+      - name: Probe official Polk legal feed schema and parcel coverage
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[probe-legal]') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee legal_probe.log
+          from ftplib import FTP_TLS
+          from pathlib import Path
+          import csv, io, os, zipfile, psycopg2
+
+          host = 'ftp.polkflpa.gov'
+          remote = '/AppraisalData/ftp_legal.zip'
+          out = Path('ftp_legal.zip')
+
+          ftp = FTP_TLS(host, timeout=120)
+          ftp.login()
+          ftp.prot_p()
+          size = ftp.size(remote)
+          print(f'FTPS host={host}')
+          print(f'remote={remote}')
+          print(f'remote_size={size}')
+          with out.open('wb') as f:
+              ftp.retrbinary(f'RETR {remote}', f.write, blocksize=1024*1024)
+          ftp.quit()
+          print(f'downloaded_size={out.stat().st_size}')
+          print(f'zip_valid={zipfile.is_zipfile(out)}')
+          if not zipfile.is_zipfile(out):
+              raise SystemExit('legal feed is not a valid ZIP')
+
+          with zipfile.ZipFile(out) as zf:
+              data_members = [i for i in zf.infolist() if not i.is_dir()]
+              if not data_members:
+                  raise SystemExit('ZIP contains no data file')
+              member = data_members[0]
+              print('zip_member=', member.filename)
+              print('uncompressed_size=', member.file_size)
+              with zf.open(member) as raw:
+                  text = io.TextIOWrapper(raw, encoding='utf-8', errors='replace', newline='')
+                  reader = csv.reader(text, delimiter=',')
+                  header = next(reader)
+                  print('column_count=', len(header))
+                  print('header_fields=', header)
+                  parcel_idx = header.index('PARCEL_ID')
+                  num_idx = header.index('NUM') if 'NUM' in header else None
+                  strap_idx = header.index('PR_STRAP') if 'PR_STRAP' in header else None
+                  row_count = 0
+                  bad_width = 0
+                  blank_parcel = 0
+                  parcel_seen = set()
+                  composite_seen = set()
+                  composite_dups = 0
+                  strap_nonblank = 0
+                  strap_seen = set()
+                  samples = []
+                  for row in reader:
+                      row_count += 1
+                      if len(row) != len(header):
+                          bad_width += 1
+                          continue
+                      if len(samples) < 3:
+                          samples.append(row)
+                      pid = row[parcel_idx].strip()
+                      if not pid:
+                          blank_parcel += 1
+                      else:
+                          parcel_seen.add(pid)
+                      if num_idx is not None:
+                          key = (pid, row[num_idx].strip())
+                          if key in composite_seen:
+                              composite_dups += 1
+                          else:
+                              composite_seen.add(key)
+                      if strap_idx is not None:
+                          strap = row[strap_idx].strip()
+                          if strap:
+                              strap_nonblank += 1
+                              strap_seen.add(strap)
+
+          print('csv_data_rows=', row_count)
+          print('bad_width_rows=', bad_width)
+          print('blank_parcel_id_rows=', blank_parcel)
+          print('unique_parcel_ids=', len(parcel_seen))
+          print('duplicate_composite_key_rows=', composite_dups)
+          print('pr_strap_present=', strap_idx is not None)
+          print('pr_strap_nonblank_rows=', strap_nonblank)
+          print('unique_pr_strap=', len(strap_seen))
+          for i, row in enumerate(samples, 1):
+              print(f'sample_row_{i}=', row)
+
+          # Compare legal parcel universe to the verified parcel table using a session-temp table only.
+          conn = psycopg2.connect(os.environ['SUPABASE_DB_URL'])
+          try:
+              with conn.cursor() as cur:
+                  cur.execute('CREATE TEMP TABLE legal_probe_parcel_ids (parcel_id text PRIMARY KEY) ON COMMIT DROP')
+                  buf = io.StringIO(''.join(f'{pid}\n' for pid in sorted(parcel_seen)))
+                  cur.copy_from(buf, 'legal_probe_parcel_ids', columns=('parcel_id',))
+                  cur.execute('SELECT count(*) FROM legal_probe_parcel_ids l LEFT JOIN polk_parcel_v2 p USING (parcel_id) WHERE p.parcel_id IS NULL')
+                  orphan_count = cur.fetchone()[0]
+                  cur.execute('SELECT count(*) FROM legal_probe_parcel_ids l JOIN polk_parcel_v2 p USING (parcel_id)')
+                  matched_count = cur.fetchone()[0]
+              conn.rollback()
+          finally:
+              conn.close()
+          print('matched_unique_legal_parcel_ids=', matched_count)
+          print('orphan_unique_legal_parcel_ids=', orphan_count)
+
+          if bad_width:
+              raise SystemExit(f'schema drift: {bad_width} rows do not match header width')
+          if blank_parcel:
+              raise SystemExit(f'key failure: {blank_parcel} legal rows have blank PARCEL_ID')
+          if composite_dups:
+              raise SystemExit(f'key failure: {composite_dups} duplicate (PARCEL_ID, NUM) rows')
+          PY
+
       - name: Preflight database identity and counts
         shell: bash
         run: |
@@ -229,4 +343,5 @@ jobs:
             importer.log
             postflight.log
             parcel_probe.log
+            legal_probe.log
             .polk_import/verified/*.verified

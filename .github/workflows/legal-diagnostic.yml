@@ -13,15 +13,20 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
-      - name: Download and validate hardened legal parser
+      - name: Install database client
+        run: pip install psycopg2-binary
+
+      - name: Download, validate, reconcile, and orphan-check hardened legal parser
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from ftplib import FTP_TLS
           from pathlib import Path
-          import csv, io, json, zipfile, collections
+          import csv, io, json, zipfile, collections, os, psycopg2
 
           host='ftp.polkflpa.gov'
           remote='/AppraisalData/ftp_legal.zip'
@@ -42,30 +47,22 @@ jobs:
           expected=['PARCEL_ID','NUM','SECTION','TOWNSHIP','RANGE','SUB','PARCEL','DSCR']
           assert header == expected, (header, expected)
 
-          # Standards-based CSV view, used only to quantify how unescaped quote marks
-          # corrupt logical record boundaries and field widths.
           legacy_reader=csv.reader(io.StringIO(text, newline=''), delimiter=',')
           next(legacy_reader)
           legacy_widths=collections.Counter()
           legacy_rows=0
-          legacy_bad=[]
+          legacy_keys=set()
           for row in legacy_reader:
               legacy_rows += 1
               legacy_widths[len(row)] += 1
-              if len(row) != 8:
-                  legacy_bad.append(row)
+              if len(row) >= 2 and row[0].strip().isdigit() and row[1].strip().isdigit():
+                  legacy_keys.add((row[0].strip(), row[1].strip()))
 
-          # Hardened parser: first seven commas delimit seven coded structural fields;
-          # the entire remaining physical-line tail is DSCR and is never CSV-reparsed.
           normalized_rows=0
           structural_failures=[]
-          composite_seen=set()
-          composite_dups=0
+          hardened_keys=set()
           parcel_seen=set()
           dscr_quote_rows=0
-          max_physical_legacy_width=0
-          max_physical_legacy_sample=None
-
           for line_no,line in enumerate(physical[1:], start=2):
               parts=line.split(',',7)
               if len(parts) != 8:
@@ -73,9 +70,6 @@ jobs:
                   continue
               structural=[v.strip('"') for v in parts[:7]]
               dscr=parts[7]
-              if len(structural) != 7 or any(',' in v for v in structural):
-                  structural_failures.append((line_no,'structural',structural))
-                  continue
               pid,num,section,township,rng,sub,parcel=structural
               if not (pid.isdigit() and num.isdigit() and section.isdigit() and township.isdigit()
                       and rng.isdigit() and sub.isdigit() and parcel.isdigit()):
@@ -83,63 +77,64 @@ jobs:
                   continue
               normalized_rows += 1
               parcel_seen.add(pid)
-              key=(pid,num)
-              if key in composite_seen:
-                  composite_dups += 1
-              else:
-                  composite_seen.add(key)
+              hardened_keys.add((pid,num))
               inner=dscr[1:-1] if len(dscr)>=2 else dscr
               if '"' in inner:
                   dscr_quote_rows += 1
 
-              # Manual canary on the worst single physical line. The historical 22-field
-              # outlier was a multi-physical-line logical merge, so the correct full-feed
-              # canary is legacy_widths[22], not a >=22 width on one physical line.
-              legacy=next(csv.reader([line], delimiter=','))
-              if len(legacy) > max_physical_legacy_width:
-                  max_physical_legacy_width=len(legacy)
-                  max_physical_legacy_sample={
-                      'line_no':line_no,
-                      'legacy_width':len(legacy),
-                      'structural':structural,
-                      'dscr_tail':dscr[:1000],
-                      'legacy_fields':legacy[:30],
-                  }
+          recovered_keys=sorted(hardened_keys - legacy_keys)
+          legacy_only_keys=sorted(legacy_keys - hardened_keys)
+
+          conn=psycopg2.connect(os.environ['SUPABASE_DB_URL'])
+          try:
+              with conn.cursor() as cur:
+                  cur.execute('CREATE TEMP TABLE legal_hardened_parcels(parcel_id text PRIMARY KEY) ON COMMIT DROP')
+                  buf=io.StringIO(''.join(pid+'\n' for pid in sorted(parcel_seen)))
+                  cur.copy_from(buf,'legal_hardened_parcels',columns=('parcel_id',))
+                  cur.execute('SELECT count(*) FROM legal_hardened_parcels l JOIN polk_parcel_v2 p USING(parcel_id)')
+                  matched=cur.fetchone()[0]
+                  cur.execute('SELECT count(*) FROM legal_hardened_parcels l LEFT JOIN polk_parcel_v2 p USING(parcel_id) WHERE p.parcel_id IS NULL')
+                  orphans=cur.fetchone()[0]
+              conn.rollback()
+          finally:
+              conn.close()
 
           summary={
-              'zip_bytes':zpath.stat().st_size,
-              'uncompressed_bytes':len(raw_bytes),
-              'physical_lines_including_header':len(physical),
               'physical_data_lines':len(physical)-1,
               'legacy_csv_logical_rows':legacy_rows,
-              'legacy_bad_records':len(legacy_bad),
+              'row_count_delta':(len(physical)-1)-legacy_rows,
               'legacy_field_count_distribution':dict(sorted(legacy_widths.items())),
               'hardened_normalized_rows':normalized_rows,
               'structural_failures':len(structural_failures),
-              'duplicate_composite_keys':composite_dups,
+              'unique_hardened_keys':len(hardened_keys),
+              'unique_legacy_keys':len(legacy_keys),
+              'recovered_distinct_keys_count':len(recovered_keys),
+              'recovered_distinct_keys':recovered_keys,
+              'legacy_only_keys_count':len(legacy_only_keys),
+              'legacy_only_keys':legacy_only_keys,
               'unique_parcel_ids':len(parcel_seen),
+              'matched_unique_parcel_ids_post_hardening':matched,
+              'orphan_unique_parcel_ids_post_hardening':orphans,
               'rows_with_quote_inside_dscr_tail':dscr_quote_rows,
-              'max_single_physical_line_legacy_width':max_physical_legacy_width,
-              'max_single_physical_line_sample':max_physical_legacy_sample,
-              'legacy_22_field_logical_records':legacy_widths.get(22,0),
-              'first_structural_failures':structural_failures[:20],
           }
-          Path('legal_parser_validation.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
-          print(json.dumps(summary,indent=2,ensure_ascii=False))
+          Path('legal_parser_reconciliation.json').write_text(json.dumps(summary,indent=2),encoding='utf-8')
+          print(json.dumps(summary,indent=2))
 
-          assert len(structural_failures) == 0, structural_failures[:5]
-          assert normalized_rows == len(physical)-1
-          assert composite_dups == 0
-          assert len(parcel_seen) == 438628
-          assert legacy_widths.get(22,0) == 1
+          assert len(structural_failures) == 0
+          assert normalized_rows == 1074337
+          assert len(hardened_keys) == 1074337
+          assert len(recovered_keys) == 46
+          assert len(legacy_only_keys) == 0
+          assert matched == 438628
+          assert orphans == 0
           PY
 
-      - name: Upload parser validation
+      - name: Upload parser reconciliation
         uses: actions/upload-artifact@v4
         with:
-          name: legal-parser-validation-${{ github.run_id }}
+          name: legal-parser-reconciliation-${{ github.run_id }}
           retention-days: 30
-          path: legal_parser_validation.json
+          path: legal_parser_reconciliation.json
 
       - name: Retain raw source briefly while feed is diagnostic
         uses: actions/upload-artifact@v4

@@ -34,12 +34,21 @@ FEEDS: dict[str, FeedStage] = {
     ),
     "parcel": FeedStage(
         name="parcel",
-        url="https://www.polkflpa.gov/FTPPage/downloader.ashx?dir=%5CAppraisalData%5C&filename=ftp_parcel.zip",
+        url="ftps://ftp.polkflpa.gov/AppraisalData/ftp_parcel.zip",
         table=_v2_names("parcel")[0],
         stage_table=_v2_names("parcel")[1],
-        columns=["parcel_id", "situs_address", "land_use_code", "acreage", "just_value", "assessed_value"],
+        columns=[
+            "parcel_id", "section", "township", "range", "sub", "parcel",
+            "dorus_code", "dordesc", "dordesc1", "nh_cd", "nh_dscr",
+            "homestead", "otherex", "excode", "exdesc", "port_val",
+            "cls_lnd_val", "ag_class", "valuetype", "valuedesc",
+            "tot_lnd_val", "tot_bld_val", "tot_xf_val", "totalval",
+            "reconcile", "assessval", "taxval", "curtaxdist", "taxdist",
+            "amtdue", "millrate", "yr_created", "yr_improved",
+            "last_insp_dt", "tot_acreage", "pr_strap"
+        ],
         conflict_key=["parcel_id"],
-        mapping_verified=False,
+        mapping_verified=True,
     ),
     "sales": FeedStage(
         name="sales",

@@ -14,14 +14,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Download and diagnose legal feed
+      - name: Download and validate hardened legal parser
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from ftplib import FTP_TLS
           from pathlib import Path
-          import csv, io, json, zipfile, collections
+          import csv, io, json, zipfile, collections, re
 
           host='ftp.polkflpa.gov'
           remote='/AppraisalData/ftp_legal.zip'
@@ -32,83 +32,113 @@ jobs:
           ftp.quit()
           assert zipfile.is_zipfile(zpath)
 
-          out_jsonl=Path('legal_bad_rows.jsonl')
-          out_summary=Path('legal_bad_rows_summary.txt')
-          width_counts=collections.Counter()
-          bad=[]
-
           with zipfile.ZipFile(zpath) as zf:
               member=next(i for i in zf.infolist() if not i.is_dir())
               raw_bytes=zf.read(member)
 
-          # Decode once so we can inspect both physical-line context and logical CSV records.
           text=raw_bytes.decode('utf-8', errors='replace')
           physical=text.splitlines()
+          header=physical[0].split(',',7)
+          header=[v.strip('"') for v in header]
+          expected=['PARCEL_ID','NUM','SECTION','TOWNSHIP','RANGE','SUB','PARCEL','DSCR']
+          assert header == expected, (header, expected)
 
-          # Logical CSV pass with line_num gives physical end-line number for each parsed record.
-          reader=csv.reader(io.StringIO(text, newline=''), delimiter=',')
-          header=next(reader)
-          expected=len(header)
-          prev_end=1
-          logical_index=0
-          for row in reader:
-              logical_index += 1
-              end_line=reader.line_num
-              start_line=prev_end+1
-              prev_end=end_line
-              width=len(row)
-              width_counts[width]+=1
-              if width==expected:
+          # Legacy standards-based CSV view, retained only to quantify the source defect.
+          legacy_reader=csv.reader(io.StringIO(text, newline=''), delimiter=',')
+          next(legacy_reader)
+          legacy_widths=collections.Counter()
+          legacy_rows=0
+          legacy_bad=[]
+          for row in legacy_reader:
+              legacy_rows += 1
+              legacy_widths[len(row)] += 1
+              if len(row) != 8:
+                  legacy_bad.append(row)
+
+          # Hardened parser: first seven commas delimit seven coded structural fields;
+          # the entire remaining physical-line tail is DSCR and is never CSV-reparsed.
+          normalized_rows=0
+          structural_failures=[]
+          composite_seen=set()
+          composite_dups=0
+          parcel_seen=set()
+          dscr_quote_rows=0
+          max_legacy_width=0
+          max_legacy_sample=None
+
+          for line_no,line in enumerate(physical[1:], start=2):
+              parts=line.split(',',7)
+              if len(parts) != 8:
+                  structural_failures.append((line_no,len(parts),line[:500]))
                   continue
-              lo=max(1,start_line-1); hi=min(len(physical),end_line+1)
-              raw_context=[{'line':n,'text':physical[n-1]} for n in range(lo,hi+1)]
-              bad.append({
-                  'logical_row_index':logical_index,
-                  'physical_start_line':start_line,
-                  'physical_end_line':end_line,
-                  'field_count':width,
-                  'expected_fields':expected,
-                  'kind':'over_width' if width>expected else 'under_width',
-                  'parcel_id': row[0].strip() if row else '',
-                  'num': row[1].strip() if len(row)>1 else '',
-                  'parsed_fields':row,
-                  'raw_context':raw_context,
-                  'previous_physical_line': physical[start_line-2] if start_line>=2 else None,
-                  'next_physical_line': physical[end_line] if end_line < len(physical) else None,
-              })
+              structural=[v.strip('"') for v in parts[:7]]
+              dscr=parts[7]
+              if len(structural) != 7 or any(',' in v for v in structural):
+                  structural_failures.append((line_no,'structural',structural))
+                  continue
+              pid,num,section,township,rng,sub,parcel=structural
+              # Fail closed on the structural boundary. These seven columns are coded data,
+              # never survey prose; if they stop looking coded, the assumption is broken.
+              if not (pid.isdigit() and num.isdigit() and section.isdigit() and township.isdigit()
+                      and rng.isdigit() and sub.isdigit() and parcel.isdigit()):
+                  structural_failures.append((line_no,'noncoded',structural))
+                  continue
+              normalized_rows += 1
+              parcel_seen.add(pid)
+              key=(pid,num)
+              if key in composite_seen:
+                  composite_dups += 1
+              else:
+                  composite_seen.add(key)
+              if '"' in dscr[1:-1] if len(dscr)>=2 else '"' in dscr:
+                  dscr_quote_rows += 1
 
-          with out_jsonl.open('w',encoding='utf-8') as f:
-              for rec in bad:
-                  f.write(json.dumps(rec, ensure_ascii=False)+'\n')
+              # Canary: independently parse this physical line with csv.reader and remember
+              # the single most extreme field explosion; verify our structural fields survive.
+              legacy=next(csv.reader([line], delimiter=','))
+              if len(legacy) > max_legacy_width:
+                  max_legacy_width=len(legacy)
+                  max_legacy_sample={
+                      'line_no':line_no,
+                      'legacy_width':len(legacy),
+                      'structural':structural,
+                      'dscr_tail':dscr[:1000],
+                      'legacy_fields':legacy[:30],
+                  }
 
-          clusters=collections.Counter(r['parcel_id'] for r in bad if r['parcel_id'])
-          kinds=collections.Counter(r['kind'] for r in bad)
-          with out_summary.open('w',encoding='utf-8') as f:
-              f.write(f'zip_bytes={zpath.stat().st_size}\n')
-              f.write(f'uncompressed_bytes={len(raw_bytes)}\n')
-              f.write(f'physical_lines={len(physical)}\n')
-              f.write(f'expected_fields={expected}\n')
-              f.write(f'bad_records={len(bad)}\n')
-              f.write(f'kind_counts={dict(kinds)}\n')
-              f.write(f'field_count_distribution={dict(sorted(width_counts.items()))}\n')
-              f.write(f'unique_bad_parcels={len(clusters)}\n')
-              f.write('top_bad_parcel_clusters=' + repr(clusters.most_common(20)) + '\n')
-              for i,rec in enumerate(bad[:20],1):
-                  f.write(f'\nBAD_SAMPLE_{i}: row={rec["logical_row_index"]} lines={rec["physical_start_line"]}-{rec["physical_end_line"]} fields={rec["field_count"]} kind={rec["kind"]} parcel={rec["parcel_id"]} num={rec["num"]}\n')
-                  for ctx in rec['raw_context']:
-                      f.write(f'  L{ctx["line"]}: {ctx["text"][:2000]}\n')
+          summary={
+              'zip_bytes':zpath.stat().st_size,
+              'uncompressed_bytes':len(raw_bytes),
+              'physical_lines_including_header':len(physical),
+              'physical_data_lines':len(physical)-1,
+              'legacy_csv_logical_rows':legacy_rows,
+              'legacy_bad_records':len(legacy_bad),
+              'legacy_field_count_distribution':dict(sorted(legacy_widths.items())),
+              'hardened_normalized_rows':normalized_rows,
+              'structural_failures':len(structural_failures),
+              'duplicate_composite_keys':composite_dups,
+              'unique_parcel_ids':len(parcel_seen),
+              'rows_with_quote_inside_dscr_tail':dscr_quote_rows,
+              'max_legacy_width':max_legacy_width,
+              'max_legacy_sample':max_legacy_sample,
+              'first_structural_failures':structural_failures[:20],
+          }
+          Path('legal_parser_validation.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
+          print(json.dumps(summary,indent=2,ensure_ascii=False))
 
-          print(out_summary.read_text(encoding='utf-8'))
+          assert len(structural_failures) == 0, structural_failures[:5]
+          assert normalized_rows == len(physical)-1
+          assert composite_dups == 0
+          assert len(parcel_seen) == 438628
+          assert max_legacy_width >= 22
           PY
 
-      - name: Upload diagnostic findings
+      - name: Upload parser validation
         uses: actions/upload-artifact@v4
         with:
-          name: legal-malformed-diagnostic-${{ github.run_id }}
+          name: legal-parser-validation-${{ github.run_id }}
           retention-days: 30
-          path: |
-            legal_bad_rows.jsonl
-            legal_bad_rows_summary.txt
+          path: legal_parser_validation.json
 
       - name: Retain raw source briefly while feed is diagnostic
         uses: actions/upload-artifact@v4

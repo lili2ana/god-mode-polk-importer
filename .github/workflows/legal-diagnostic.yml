@@ -1,0 +1,119 @@
+name: Polk Legal Diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/legal-diagnostic.yml'
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Download and diagnose legal feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from ftplib import FTP_TLS
+          from pathlib import Path
+          import csv, io, json, zipfile, collections
+
+          host='ftp.polkflpa.gov'
+          remote='/AppraisalData/ftp_legal.zip'
+          zpath=Path('ftp_legal.zip')
+          ftp=FTP_TLS(host, timeout=120); ftp.login(); ftp.prot_p()
+          with zpath.open('wb') as f:
+              ftp.retrbinary(f'RETR {remote}', f.write, blocksize=1024*1024)
+          ftp.quit()
+          assert zipfile.is_zipfile(zpath)
+
+          out_jsonl=Path('legal_bad_rows.jsonl')
+          out_summary=Path('legal_bad_rows_summary.txt')
+          width_counts=collections.Counter()
+          bad=[]
+
+          with zipfile.ZipFile(zpath) as zf:
+              member=next(i for i in zf.infolist() if not i.is_dir())
+              raw_bytes=zf.read(member)
+
+          # Decode once so we can inspect both physical-line context and logical CSV records.
+          text=raw_bytes.decode('utf-8', errors='replace')
+          physical=text.splitlines()
+
+          # Logical CSV pass with line_num gives physical end-line number for each parsed record.
+          reader=csv.reader(io.StringIO(text, newline=''), delimiter=',')
+          header=next(reader)
+          expected=len(header)
+          prev_end=1
+          logical_index=0
+          for row in reader:
+              logical_index += 1
+              end_line=reader.line_num
+              start_line=prev_end+1
+              prev_end=end_line
+              width=len(row)
+              width_counts[width]+=1
+              if width==expected:
+                  continue
+              lo=max(1,start_line-1); hi=min(len(physical),end_line+1)
+              raw_context=[{'line':n,'text':physical[n-1]} for n in range(lo,hi+1)]
+              bad.append({
+                  'logical_row_index':logical_index,
+                  'physical_start_line':start_line,
+                  'physical_end_line':end_line,
+                  'field_count':width,
+                  'expected_fields':expected,
+                  'kind':'over_width' if width>expected else 'under_width',
+                  'parcel_id': row[0].strip() if row else '',
+                  'num': row[1].strip() if len(row)>1 else '',
+                  'parsed_fields':row,
+                  'raw_context':raw_context,
+                  'previous_physical_line': physical[start_line-2] if start_line>=2 else None,
+                  'next_physical_line': physical[end_line] if end_line < len(physical) else None,
+              })
+
+          with out_jsonl.open('w',encoding='utf-8') as f:
+              for rec in bad:
+                  f.write(json.dumps(rec, ensure_ascii=False)+'\n')
+
+          clusters=collections.Counter(r['parcel_id'] for r in bad if r['parcel_id'])
+          kinds=collections.Counter(r['kind'] for r in bad)
+          with out_summary.open('w',encoding='utf-8') as f:
+              f.write(f'zip_bytes={zpath.stat().st_size}\n')
+              f.write(f'uncompressed_bytes={len(raw_bytes)}\n')
+              f.write(f'physical_lines={len(physical)}\n')
+              f.write(f'expected_fields={expected}\n')
+              f.write(f'bad_records={len(bad)}\n')
+              f.write(f'kind_counts={dict(kinds)}\n')
+              f.write(f'field_count_distribution={dict(sorted(width_counts.items()))}\n')
+              f.write(f'unique_bad_parcels={len(clusters)}\n')
+              f.write('top_bad_parcel_clusters=' + repr(clusters.most_common(20)) + '\n')
+              for i,rec in enumerate(bad[:20],1):
+                  f.write(f'\nBAD_SAMPLE_{i}: row={rec["logical_row_index"]} lines={rec["physical_start_line"]}-{rec["physical_end_line"]} fields={rec["field_count"]} kind={rec["kind"]} parcel={rec["parcel_id"]} num={rec["num"]}\n')
+                  for ctx in rec['raw_context']:
+                      f.write(f'  L{ctx["line"]}: {ctx["text"][:2000]}\n')
+
+          print(out_summary.read_text(encoding='utf-8'))
+          PY
+
+      - name: Upload diagnostic findings
+        uses: actions/upload-artifact@v4
+        with:
+          name: legal-malformed-diagnostic-${{ github.run_id }}
+          retention-days: 30
+          path: |
+            legal_bad_rows.jsonl
+            legal_bad_rows_summary.txt
+
+      - name: Retain raw source briefly while feed is diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: legal-raw-source-${{ github.run_id }}
+          retention-days: 3
+          compression-level: 0
+          path: ftp_legal.zip

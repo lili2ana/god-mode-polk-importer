@@ -17,10 +17,62 @@ def print_connection_identity(conn):
     log.info("Connected as %s@%s to database '%s'", user, host, db)
 
 
+def get_persistent_feed_status(conn, feed_name: str):
+    if not table_exists(conn, "god_mode_feed_status"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, source_row_count, stage_row_count, prod_row_count, column_count, "
+            "mapping_version, verified_at, github_run_id, commit_sha "
+            "FROM public.god_mode_feed_status WHERE feed_name = %s",
+            (feed_name,),
+        )
+        return cur.fetchone()
+
+
+def persist_feed_status(conn, stage: FeedStage, source_file: str, source_size_bytes: int,
+                        source_row_count: int, staged_count: int, prod_count: int,
+                        status: str = "verified"):
+    run_id = os.environ.get("GITHUB_RUN_ID")
+    commit_sha = os.environ.get("GITHUB_SHA")
+    mapping_version = f"{stage.name}_v2_{len(stage.columns)}cols"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO public.god_mode_feed_status
+              (feed_name, source_file, source_size_bytes, source_row_count,
+               stage_row_count, prod_row_count, column_count, mapping_version,
+               status, verified_at, github_run_id, commit_sha, notes, updated_at)
+            VALUES
+              (%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,now())
+            ON CONFLICT (feed_name) DO UPDATE SET
+              source_file = EXCLUDED.source_file,
+              source_size_bytes = EXCLUDED.source_size_bytes,
+              source_row_count = EXCLUDED.source_row_count,
+              stage_row_count = EXCLUDED.stage_row_count,
+              prod_row_count = EXCLUDED.prod_row_count,
+              column_count = EXCLUDED.column_count,
+              mapping_version = EXCLUDED.mapping_version,
+              status = EXCLUDED.status,
+              verified_at = EXCLUDED.verified_at,
+              github_run_id = EXCLUDED.github_run_id,
+              commit_sha = EXCLUDED.commit_sha,
+              notes = EXCLUDED.notes,
+              updated_at = now()
+            """,
+            (
+                stage.name, source_file, source_size_bytes, source_row_count,
+                staged_count, prod_count, len(stage.columns), mapping_version,
+                status, run_id, commit_sha,
+                "Verified by importer after staging COPY, set-based merge, and post-merge row-count checks.",
+            ),
+        )
+    conn.commit()
+
+
 def verify_all_stages(conn):
     """Read-only diagnostic: prints stage/production row counts for every
-    feed, and flags missing tables or empty tables explicitly. Run this
-    FIRST whenever counts look wrong instead of re-running the full import."""
+    feed, plus persistent verification state stored in Supabase."""
     print_connection_identity(conn)
     log.info("%-12s %-28s %10s   %-28s %10s", "STAGE", "STAGE TABLE", "ROWS", "PROD TABLE", "ROWS")
     for stage_name in SEQUENCE:
@@ -34,13 +86,19 @@ def verify_all_stages(conn):
         log.info("%-12s %-28s %10s   %-28s %10s", stage.name, stage_label,
                   stage_rows if stage_exists else "n/a", prod_label, prod_rows if prod_exists else "n/a")
 
-        marker = VERIFIED_MARKER_DIR / f"{stage.name}.verified"
-        if not marker.exists() and (stage_rows > 0 or prod_rows > 0):
-            log.warning("  %s has data but no local .verified marker — "
-                        "was this loaded by a different run/host?", stage.name)
-        if marker.exists() and stage_rows == 0:
-            log.warning("  %s has a .verified marker but stage table reads 0 now — "
-                        "was it truncated by a later run without reloading?", stage.name)
+        persistent = get_persistent_feed_status(conn, stage.name)
+        if persistent:
+            status, source_rows, stored_stage, stored_prod, col_count, mapping_version, verified_at, run_id, commit_sha = persistent
+            log.info(
+                "  persistent_status=%s source_rows=%s stage_rows=%s prod_rows=%s columns=%s mapping=%s verified_at=%s run=%s sha=%s",
+                status, source_rows, stored_stage, stored_prod, col_count, mapping_version,
+                verified_at, run_id, commit_sha,
+            )
+            if status == "verified" and stage_exists and prod_exists:
+                if stored_stage != stage_rows or stored_prod != prod_rows:
+                    log.warning("  %s persistent verification counts no longer match live tables", stage.name)
+        elif stage_rows > 0 or prod_rows > 0:
+            log.warning("  %s has data but no persistent Supabase verification record", stage.name)
 
 
 # --------------------------------------------------------------------------

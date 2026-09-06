@@ -11,6 +11,7 @@ on:
         options:
           - verify-only
           - owner
+          - parcel
           - legal
           - dry-run-owner
           - full
@@ -186,6 +187,13 @@ jobs:
         run: |
           set -euo pipefail
           python polk_importer.py --only owner --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
+
+      - name: Import parcel
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'parcel') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-parcel]')) }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python polk_importer.py --only parcel --partitions "${{ github.event_name == 'workflow_dispatch' && inputs.partitions || '32' }}" | tee importer.log
 
       - name: Import legal
         if: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'legal') || (github.event_name == 'push' && contains(github.event.head_commit.message, '[run-legal]')) }}

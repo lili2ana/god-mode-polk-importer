@@ -3,7 +3,6 @@ from ftplib import FTP_TLS
 from pathlib import Path
 import csv
 import zipfile
-import os
 
 HOST='ftp.polkflpa.gov'
 DIR='/AppraisalData'
@@ -25,23 +24,18 @@ def inspect_feed(zip_path: Path):
         extracted=member.file_size
         txt_path=zip_path.with_suffix('.txt')
         with zf.open(member) as src, open(txt_path,'wb') as dst:
-            while True:
-                chunk=src.read(1024*1024)
-                if not chunk:
-                    break
+            while chunk := src.read(1024*1024):
                 dst.write(chunk)
 
-    physical_lines=0
     with open(txt_path,'rb') as f:
-        for _ in f:
-            physical_lines += 1
+        physical_lines=sum(1 for _ in f)
 
-    rows=0
-    width_errors=0
-    serialized_bytes=0
+    rows=width_errors=serialized_bytes=0
     header=None
     sample=[]
-    with open(txt_path,'r',encoding='cp1252',newline='') as f:
+    # Polk legacy exports contain a few undefined CP1252 bytes. latin-1 is a
+    # lossless one-byte decoding for structural probing; no DB writes occur.
+    with open(txt_path,'r',encoding='latin-1',newline='') as f:
         reader=csv.reader(f)
         header=next(reader)
         expected=len(header)
@@ -49,7 +43,7 @@ def inspect_feed(zip_path: Path):
             rows += 1
             if len(row) != expected:
                 width_errors += 1
-            serialized_bytes += sum(len(v.encode('cp1252',errors='replace')) for v in row)
+            serialized_bytes += sum(len(v.encode('latin-1')) for v in row)
             if len(sample) < 3:
                 sample.append(row)
 
@@ -75,9 +69,7 @@ def inspect_feed(zip_path: Path):
 
 def main():
     ftp=FTP_TLS(HOST, timeout=180)
-    ftp.login()
-    ftp.prot_p()
-    ftp.cwd(DIR)
+    ftp.login(); ftp.prot_p(); ftp.cwd(DIR)
     try:
         for feed in FEEDS:
             local=Path(feed)
@@ -85,10 +77,8 @@ def main():
             inspect_feed(local)
             local.unlink(missing_ok=True)
     finally:
-        try:
-            ftp.quit()
-        except Exception:
-            pass
+        try: ftp.quit()
+        except Exception: pass
 
 if __name__=='__main__':
     main()

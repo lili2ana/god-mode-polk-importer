@@ -1,0 +1,23 @@
+name: Probe Polk Sales Shards
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_sales_shards.py'
+      - '.github/workflows/probe-sales-shards.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe sales shard sizing
+        run: python probe_sales_shards.py | tee sales_shards_probe.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sales-shards-probe-${{ github.run_id }}
+          path: sales_shards_probe.log
+          retention-days: 30

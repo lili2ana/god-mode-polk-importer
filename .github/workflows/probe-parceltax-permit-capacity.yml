@@ -1,0 +1,23 @@
+name: Probe Polk Parcel-Tax and Permit Capacity
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_parceltax_permit_capacity.py'
+      - '.github/workflows/probe-parceltax-permit-capacity.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe parcel-tax and permit feeds
+        run: python probe_parceltax_permit_capacity.py | tee capacity_probe.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capacity-probe-${{ github.run_id }}
+          path: capacity_probe.log
+          retention-days: 30

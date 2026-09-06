@@ -2,10 +2,36 @@
     if staged_count == 0:
         raise RuntimeError(f"Stage '{stage.name}': staging table is empty after load — aborting before merge trust.")
 
+    prod_count = row_count_of(conn, stage.table)
+    if prod_count == 0:
+        raise RuntimeError(f"Stage '{stage.name}': production table is empty after merge — refusing verification.")
+
+    persist_feed_status(
+        conn,
+        stage=stage,
+        source_file=zip_path.name,
+        source_size_bytes=zip_path.stat().st_size,
+        source_row_count=staged_count,
+        staged_count=staged_count,
+        prod_count=prod_count,
+        status="verified",
+    )
+
+    # Keep a local marker only as a per-run artifact; Supabase is the durable source of truth.
     marker = VERIFIED_MARKER_DIR / f"{stage.name}.verified"
-    marker.write_text(f"staged_rows={staged_count}\nupserted_rows={upserted}\n")
-    log.info("=== Stage %s verified: staged=%d upserted=%d ===", stage.name, staged_count, upserted)
-    return {"stage": stage.name, "staged": staged_count, "upserted": upserted, "dry_run": False}
+    marker.write_text(
+        f"staged_rows={staged_count}\nupserted_rows={upserted}\nprod_rows={prod_count}\n"
+        "source_of_truth=public.god_mode_feed_status\n"
+    )
+    log.info("=== Stage %s verified persistently: staged=%d upserted=%d prod=%d ===",
+             stage.name, staged_count, upserted, prod_count)
+    return {
+        "stage": stage.name,
+        "staged": staged_count,
+        "upserted": upserted,
+        "prod": prod_count,
+        "dry_run": False,
+    }
 
 
 def run_stage_direct(stage_name: str, dry_run: bool, conn) -> dict:
@@ -39,6 +65,18 @@ def run_stage_direct(stage_name: str, dry_run: bool, conn) -> dict:
     return {"stage": stage.name, "rows": total, "dry_run": dry_run}
 
 
+def persistent_full_sequence_verified(conn) -> bool:
+    if not table_exists(conn, "god_mode_feed_status"):
+        return False
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT feed_name, status FROM public.god_mode_feed_status WHERE feed_name = ANY(%s)",
+            (SEQUENCE,),
+        )
+        statuses = {name: status for name, status in cur.fetchall()}
+    return all(statuses.get(name) == "verified" for name in SEQUENCE)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Polk Bulk Importer — production runner")
     parser.add_argument("--only", choices=SEQUENCE)
@@ -47,7 +85,7 @@ def main():
     parser.add_argument("--partitions", type=int, default=DEFAULT_PARTITIONS)
     parser.add_argument("--mode", choices=["staging", "direct"], default="staging")
     parser.add_argument("--verify-only", action="store_true",
-                         help="Read-only: print stage/production row counts for every feed and exit. Run this first if counts look wrong.")
+                         help="Read-only: print stage/production row counts and persistent Supabase verification state, then exit.")
     args = parser.parse_args()
 
     if args.verify_only:
@@ -77,6 +115,10 @@ def main():
                 results[stage_name] = run_stage_staging(stage_name, args.partitions, args.dry_run, conn)
             else:
                 results[stage_name] = run_stage_direct(stage_name, args.dry_run, conn)
+
+        all_verified = False
+        if conn is not None:
+            all_verified = persistent_full_sequence_verified(conn)
     except Exception:
         log.exception("Import sequence aborted.")
         sys.exit(1)
@@ -84,10 +126,9 @@ def main():
         if conn is not None:
             conn.close()
 
-    all_verified = all((VERIFIED_MARKER_DIR / f"{s}.verified").exists() for s in SEQUENCE)
     log.info("Done. Results: %s", results)
     log.info(
-        "Full-sequence verified: %s — %s",
+        "Full-sequence persistent verification: %s — %s",
         all_verified,
         "seller outreach gate may be reviewed" if all_verified else "seller outreach must stay disabled",
     )

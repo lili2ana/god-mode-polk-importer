@@ -1,0 +1,23 @@
+name: Probe Polk Sales ID Semantics
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_sales_id_semantics.py'
+      - '.github/workflows/probe-sales-id.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe SALE_ID vs LN_NUM
+        run: python probe_sales_id_semantics.py | tee sales_id_probe.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sales-id-probe-${{ github.run_id }}
+          path: sales_id_probe.log
+          retention-days: 30

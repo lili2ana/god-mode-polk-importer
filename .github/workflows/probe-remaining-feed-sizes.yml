@@ -1,0 +1,18 @@
+name: Probe Remaining Polk Feed Sizes
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_remaining_feed_sizes.py'
+      - '.github/workflows/probe-remaining-feed-sizes.yml'
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Probe remaining feed sizes
+        run: python probe_remaining_feed_sizes.py

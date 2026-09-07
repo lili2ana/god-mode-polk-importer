@@ -36,6 +36,51 @@ def write_report(report):
     OUT.write_text(json.dumps(report, indent=2), encoding='utf-8')
 
 
+def parse_result_rows(body):
+    text=clean(body)
+    marker='Name Date Type Book Page Legal File# Status Flag View'
+    if marker in text:
+        text=text.split(marker,1)[1]
+    footer=re.search(r'\s+Retrieved records\b', text, re.I)
+    if footer:
+        text=text[:footer.start()]
+
+    row_re=re.compile(
+        r'(?P<name>.+?)\s+'
+        r'(?P<date>\d{2}/\d{2}/\d{4})\s+'
+        r'(?P<type>LP|L PEN)\s+'
+        r'(?P<book>\d+)\s+'
+        r'(?P<page>\d+)\s+'
+        r'(?P<legal>.+?)\s+'
+        r'(?P<file_no>\d{10})\s+'
+        r'(?P<status>[A-Z])'
+        r'(?:\s+(?P<flag>[A-Z]))?\s+View'
+        r'(?=\s+.+?\s+\d{2}/\d{2}/\d{4}\s+(?:LP|L PEN)\s+\d+\s+\d+|$)',
+        re.I,
+    )
+    rows=[]
+    for m in row_re.finditer(text):
+        name=clean(m.group('name'))
+        from_party=name.startswith('*')
+        name=name.lstrip('*').strip()
+        legal=clean(m.group('legal'))
+        parcel_id=legal if re.fullmatch(r'\d{2}-\d{2}-\d{2}-\d{6}-\d{6}',legal) else None
+        rows.append({
+            'name':name,
+            'from_party':from_party,
+            'date':m.group('date'),
+            'type':m.group('type').upper(),
+            'book':m.group('book'),
+            'page':m.group('page'),
+            'legal':legal,
+            'file_no':m.group('file_no'),
+            'status':m.group('status').upper(),
+            'flag':(m.group('flag') or '').upper(),
+            'parcel_id':parcel_id,
+        })
+    return rows
+
+
 def main():
     report={'from':FROM_DATE,'to':TO_DATE,'doc_types':DOC_TYPES,'status':'started'}
     try:
@@ -87,7 +132,8 @@ def main():
                 el=visible_inputs.nth(i)
                 ph=(el.get_attribute('placeholder') or '').lower()
                 typ=(el.get_attribute('type') or 'text').lower()
-                if typ=='checkbox': continue
+                if typ=='checkbox':
+                    continue
                 if ('document type' in ph) and ('search document' not in ph) and doc_input is None:
                     doc_input=el
                 if 'mm/dd/yyyy' in ph:
@@ -96,7 +142,8 @@ def main():
                 from_input,to_input=date_inputs[0],date_inputs[1]
             if doc_input is None:
                 text_inputs=[visible_inputs.nth(i) for i in range(visible_inputs.count()) if (visible_inputs.nth(i).get_attribute('type') or 'text').lower()!='checkbox']
-                if text_inputs: doc_input=text_inputs[0]
+                if text_inputs:
+                    doc_input=text_inputs[0]
             if not (doc_input and from_input and to_input):
                 raise RuntimeError(f'Could not identify search inputs; visible={report["inputs"]}')
 
@@ -109,73 +156,43 @@ def main():
             for i in range(searches.count()):
                 b=searches.nth(i)
                 if b.is_visible():
-                    b.click(timeout=5000); clicked=True; break
+                    b.click(timeout=5000)
+                    clicked=True
+                    break
             if not clicked:
                 raise RuntimeError('Visible Search button not found')
+
             page.wait_for_timeout(1600)
             page.screenshot(path=str(SHOT),full_page=True)
             body=page.locator('body').inner_text(timeout=5000)
-            report['results_body_excerpt']=clean(body)[:15000]
+            clean_body=clean(body)
+            report['results_body_excerpt']=clean_body[:15000]
             mt=re.search(r'\((\d+) total\) records',body,re.I)
-            if mt: report['total_party_rows']=int(mt.group(1))
-            log('STAGE: results loaded; total rows =', report.get('total_party_rows'))
+            if mt:
+                report['total_party_rows']=int(mt.group(1))
+            log('STAGE: results loaded; reported total rows =', report.get('total_party_rows'))
 
-            party_rows=[]
-            for v in page.get_by_text('View',exact=True).all():
-                try:
-                    if v.is_visible(): party_rows.append(clean(v.locator('xpath=ancestor::tr[1]').inner_text(timeout=3000)))
-                except Exception as e:
-                    log('ROW CAPTURE WARNING:', type(e).__name__, e)
-            report['party_rows_first_page']=party_rows
-            report['view_count_first_page']=len(party_rows)
-            log('STAGE: visible result rows captured =', len(party_rows))
+            rows=parse_result_rows(body)
+            report['parsed_party_rows']=rows
+            report['parsed_party_row_count']=len(rows)
+            unique_documents={}
+            for row in rows:
+                unique_documents.setdefault(row['file_no'],row)
+            report['documents']=list(unique_documents.values())
+            report['unique_document_count']=len(unique_documents)
+            report['direct_parcel_rows']=[r for r in rows if r['parcel_id']]
+            report['direct_parcel_row_count']=len(report['direct_parcel_rows'])
+            report['direct_parcel_ids']=sorted({r['parcel_id'] for r in rows if r['parcel_id']})
+            report['direct_parcel_unique_count']=len(report['direct_parcel_ids'])
+            report['parse_matches_reported_total']=(report.get('total_party_rows')==len(rows)) if report.get('total_party_rows') is not None else None
 
-            documents=[]
-            detail_errors=[]
-            sample_limit=min(10,len(party_rows))
-            log('STAGE: detail sampling; limit =', sample_limit)
-            for idx in range(sample_limit):
-                log(f'DETAIL {idx+1}/{sample_limit}: locating View link')
-                try:
-                    views=[v for v in page.get_by_text('View',exact=True).all() if v.is_visible()]
-                    if idx>=len(views):
-                        detail_errors.append({'index':idx,'error':'View link index unavailable'})
-                        break
-                    rowtxt=''
-                    try:
-                        rowtxt=clean(views[idx].locator('xpath=ancestor::tr[1]').inner_text(timeout=3000))
-                    except Exception as e:
-                        log(f'DETAIL {idx+1}: row text warning:', type(e).__name__, e)
-                    log(f'DETAIL {idx+1}: clicking', rowtxt[:160])
-                    views[idx].click(timeout=5000)
-                    page.wait_for_timeout(500)
-                    txt=page.locator('body').inner_text(timeout=5000)
-                    data={'result_row':rowtxt}
-                    for label,key in [('Type','type'),('File No.','file_no'),('Date','date'),('Book/Page','book_page'),('Legal','legal'),('District','district'),('Map','map'),('Sub Map','sub_map'),('Parcel','parcel'),('Sub Parcel','sub_parcel')]:
-                        m=re.search(rf'^{re.escape(label)}\s*:\s*(.*)$',txt,re.I|re.M)
-                        data[key]=clean(m.group(1)) if m else ''
-                    data['linked_button_candidates']=[clean(b.inner_text(timeout=2000)) for b in page.locator('button:visible').all() if re.search(r'\b\d{10}\b',clean(b.inner_text(timeout=2000)))]
-                    if data.get('file_no') and not any(d.get('file_no')==data['file_no'] for d in documents):
-                        documents.append(data)
-                    log(f'DETAIL {idx+1}: file_no={data.get("file_no")!r} legal={data.get("legal")!r}')
-                except Exception as e:
-                    detail_errors.append({'index':idx,'error':f'{type(e).__name__}: {e}'})
-                    log(f'DETAIL {idx+1}: ERROR {type(e).__name__}: {e}')
-                finally:
-                    try:
-                        if click_visible_exact(page,'Results',timeout=3000):
-                            page.wait_for_timeout(250)
-                        else:
-                            log(f'DETAIL {idx+1}: Results tab not found; attempting browser back')
-                            page.go_back(wait_until='domcontentloaded',timeout=5000)
-                    except Exception as e:
-                        log(f'DETAIL {idx+1}: return-to-results warning {type(e).__name__}: {e}')
+            log('STAGE: parsed party rows =', len(rows))
+            log('STAGE: unique documents =', len(unique_documents))
+            log('STAGE: direct parcel-linked rows =', report['direct_parcel_row_count'])
+            log('STAGE: direct unique parcels =', report['direct_parcel_unique_count'])
+            if report.get('total_party_rows') is not None and len(rows)!=report['total_party_rows']:
+                raise RuntimeError(f'Parser row count mismatch: parsed={len(rows)} reported={report["total_party_rows"]}')
 
-            report['documents_sample']=documents
-            report['detail_errors']=detail_errors
-            report['unique_sample_file_nos']=len({d['file_no'] for d in documents if d.get('file_no')})
-            report['sample_with_direct_parcel_legal']=sum(bool(re.fullmatch(r'\d{2}-\d{2}-\d{6}-\d{6}',d.get('legal',''))) for d in documents)
-            report['sample_with_linked_buttons']=sum(bool(d.get('linked_button_candidates')) for d in documents)
             report['status']='completed'
             write_report(report)
             log('STAGE: completed')
@@ -183,7 +200,8 @@ def main():
             browser.close()
     except Exception as e:
         report['error']=f'{type(e).__name__}: {e}'
-        if report.get('status')=='started': report['status']='failed'
+        if report.get('status')=='started':
+            report['status']='failed'
         write_report(report)
         log(json.dumps(report,indent=2))
         raise

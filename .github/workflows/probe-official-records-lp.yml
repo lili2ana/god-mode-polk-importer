@@ -9,7 +9,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +21,9 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Run Official Records LP probe
         shell: bash
+        timeout-minutes: 10
         run: |
+          set -x
           set -euo pipefail
           python probe_official_records_lp.py | tee official_records_lp_probe.log
       - uses: actions/upload-artifact@v4
@@ -33,3 +35,4 @@ jobs:
             official_records_lp_probe.json
             official_records_results.png
           retention-days: 30
+          if-no-files-found: warn

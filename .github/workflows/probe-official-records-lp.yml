@@ -20,7 +20,10 @@ jobs:
           pip install playwright
           python -m playwright install --with-deps chromium
       - name: Run Official Records LP probe
-        run: python probe_official_records_lp.py | tee official_records_lp_probe.log
+        shell: bash
+        run: |
+          set -euo pipefail
+          python probe_official_records_lp.py | tee official_records_lp_probe.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

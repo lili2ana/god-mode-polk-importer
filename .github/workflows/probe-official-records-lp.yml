@@ -22,10 +22,12 @@ jobs:
       - name: Run Official Records LP probe
         shell: bash
         timeout-minutes: 10
+        env:
+          PYTHONUNBUFFERED: '1'
         run: |
           set -x
           set -euo pipefail
-          python probe_official_records_lp.py | tee official_records_lp_probe.log
+          python -u probe_official_records_lp.py 2>&1 | tee official_records_lp_probe.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

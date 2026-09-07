@@ -1,0 +1,32 @@
+name: Probe Official Records LP
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'probe_official_records_lp.py'
+      - '.github/workflows/probe-official-records-lp.yml'
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+      - name: Run Official Records LP probe
+        run: python probe_official_records_lp.py | tee official_records_lp_probe.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-records-lp-${{ github.run_id }}
+          path: |
+            official_records_lp_probe.log
+            official_records_lp_probe.json
+            official_records_results.png
+          retention-days: 30

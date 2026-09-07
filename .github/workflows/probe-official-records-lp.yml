@@ -10,15 +10,26 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install Playwright
+      - name: Install Playwright and Postgres driver
         run: |
-          pip install playwright
+          pip install playwright psycopg2-binary
           python -m playwright install --with-deps chromium
+      - name: Require Supabase secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
+          case "$SUPABASE_DB_URL" in
+            *bnsmnztxkqmphvbikaxh*) ;;
+            *) echo "Refusing to run: wrong Supabase project"; exit 3 ;;
+          esac
       - name: Run Official Records LP probe
         shell: bash
         timeout-minutes: 10

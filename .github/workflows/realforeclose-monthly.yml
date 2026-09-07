@@ -2,6 +2,8 @@ name: Polk RealForeclose Monthly Ingest
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '15 12 * * *'
   push:
     branches: [main]
     paths:
@@ -10,35 +12,42 @@ on:
 
 jobs:
   ingest:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 30
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
       - name: Install dependencies
+        shell: pwsh
         run: |
+          python -m pip install --upgrade pip
           pip install playwright psycopg2-binary
-          python -m playwright install --with-deps chromium
+          python -m playwright install chromium
+
       - name: Require correct Supabase project
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
-          case "$SUPABASE_DB_URL" in
-            *bnsmnztxkqmphvbikaxh*) ;;
-            *) echo "Refusing to run: wrong Supabase project"; exit 3 ;;
-          esac
+          if ([string]::IsNullOrWhiteSpace($env:SUPABASE_DB_URL)) {
+            throw 'SUPABASE_DB_URL secret is missing'
+          }
+          if ($env:SUPABASE_DB_URL -notmatch 'bnsmnztxkqmphvbikaxh') {
+            throw 'Refusing to run: wrong Supabase project'
+          }
+
       - name: Ingest monthly foreclosure calendar and cases
-        shell: bash
+        shell: pwsh
         timeout-minutes: 20
         run: |
-          set -euo pipefail
-          python -u scrape_realforeclose_month.py 2>&1 | tee realforeclose_month.log
+          python -u scrape_realforeclose_month.py 2>&1 | Tee-Object -FilePath realforeclose_month.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import calendar, json, os, re
 from datetime import date, datetime
+from pathlib import Path
 from urllib.parse import urljoin, urlparse, parse_qs
 from playwright.sync_api import sync_playwright
 import psycopg2
@@ -10,6 +11,9 @@ CALENDAR_URL='https://polk.realforeclose.com/index.cfm?ZACTION=USER&ZMETHOD=CALE
 DAYLIST='https://polk.realforeclose.com/index.cfm?zaction=AUCTION&Zmethod=DAYLIST&AUCTIONDATE={}'
 BASE='https://polk.realforeclose.com/'
 OUT='realforeclose_month_probe.json'
+BLOCK_HTML='realforeclose_calendar_block.html'
+BLOCK_PNG='realforeclose_calendar_block.png'
+PROFILE_DIR=os.getenv('REALFORECLOSE_PROFILE_DIR', r'C:\actions-runner\_realforeclose-profile')
 
 
 def clean(s):
@@ -65,22 +69,78 @@ def target_month():
     return date.today().replace(day=1)
 
 
+def write_report(report):
+    with open(OUT,'w',encoding='utf-8') as f:
+        json.dump(report,f,indent=2,default=str)
+
+
+def local_browser_path():
+    candidates=[
+        r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+    ]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def main():
     db=os.environ['SUPABASE_DB_URL']
     month=target_month()
     report={'calendar_url':CALENDAR_URL,'target_month':month.isoformat(),'status':'started','days':[],'auctions':[]}
+    Path(PROFILE_DIR).mkdir(parents=True,exist_ok=True)
+
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True)
-        page=browser.new_page(viewport={'width':1500,'height':1000})
+        browser_path=local_browser_path()
+        launch_args={
+            'user_data_dir': PROFILE_DIR,
+            'headless': True,
+            'viewport': {'width':1500,'height':1000},
+            'locale': 'en-US',
+            'timezone_id': 'America/New_York',
+        }
+        if browser_path:
+            launch_args['executable_path']=browser_path
+            report['browser_executable']=browser_path
+        else:
+            report['browser_executable']='playwright-bundled-chromium'
+
+        context=p.chromium.launch_persistent_context(**launch_args)
+        page=context.pages[0] if context.pages else context.new_page()
         page.set_default_timeout(7000)
         page.set_default_navigation_timeout(30000)
 
-        # Verify site/calendar is reachable, but do not depend on its JS/DOM for discovery.
+        # Start from the site root first so any normal session cookies/bootstrap state
+        # are established before opening the auction calendar.
+        root_response=page.goto(BASE,wait_until='domcontentloaded')
+        report['root_http_status']=root_response.status if root_response else None
+        report['root_title']=page.title()
+        page.wait_for_timeout(1000)
+
         r=page.goto(CALENDAR_URL,wait_until='domcontentloaded')
         report['calendar_http_status']=r.status if r else None
         report['calendar_title']=page.title()
+        report['calendar_final_url']=page.url
         report['calendar_text_excerpt']=clean(page.locator('body').inner_text())[:5000]
+        report['cookie_names']=[c.get('name') for c in context.cookies()]
+
         if report['calendar_http_status'] and report['calendar_http_status'] >= 400:
+            report['status']='calendar_http_failure'
+            try:
+                page.screenshot(path=BLOCK_PNG,full_page=True)
+                report['block_screenshot']=BLOCK_PNG
+            except Exception as exc:
+                report['block_screenshot_error']=repr(exc)
+            try:
+                Path(BLOCK_HTML).write_text(page.content(),encoding='utf-8')
+                report['block_html']=BLOCK_HTML
+            except Exception as exc:
+                report['block_html_error']=repr(exc)
+            write_report(report)
+            context.close()
             raise RuntimeError(f'Calendar HTTP failure: {report["calendar_http_status"]}')
 
         days_in_month=calendar.monthrange(month.year,month.month)[1]
@@ -94,6 +154,9 @@ def main():
             status=rr.status if rr else None
             page.wait_for_timeout(250)
             day_text=clean(page.locator('body').inner_text())
+            if status and status >= 400:
+                print('day',day_date,'http_status',status,flush=True)
+                continue
             detail_links=[]
             for a in page.locator('a').all():
                 href=a.get_attribute('href') or ''
@@ -101,7 +164,6 @@ def main():
                 if 'ZMETHOD=DETAILS' in hu and 'AID=' in hu:
                     full=urljoin(BASE,href)
                     if full not in detail_links: detail_links.append(full)
-            # Fallback: details URLs may be embedded in onclick/script instead of href.
             if not detail_links:
                 html=page.content()
                 for m in re.finditer(r'[^"\']*ZMETHOD=DETAILS[^"\']*AID=\d+[^"\']*',html,re.I):
@@ -117,18 +179,25 @@ def main():
             for detail_url in detail_links:
                 if detail_url in seen_detail: continue
                 seen_detail.add(detail_url)
-                page.goto(detail_url,wait_until='domcontentloaded')
+                detail_response=page.goto(detail_url,wait_until='domcontentloaded')
+                if detail_response and detail_response.status >= 400:
+                    print('detail_http_failure',detail_response.status,detail_url,flush=True)
+                    continue
                 page.wait_for_timeout(300)
                 text=page.locator('body').inner_text()
                 row=parse_detail(text,detail_url)
                 if not row['auction_date']: row['auction_date']=day_date
                 report['auctions'].append(row)
                 print('case',row['auction_id'],row['case_number'],row['parcel_id'],flush=True)
-        browser.close()
+        context.close()
 
     if not report['days']:
+        report['status']='no_populated_days'
+        write_report(report)
         raise RuntimeError(f'No populated foreclosure auction days found for {month:%Y-%m}')
     if not report['auctions']:
+        report['status']='no_auction_details'
+        write_report(report)
         raise RuntimeError(f'Populated auction days found but no auction details parsed for {month:%Y-%m}')
 
     conn=psycopg2.connect(db)
@@ -155,7 +224,7 @@ def main():
     finally:
       conn.close()
     report['status']='completed'; report['auction_count']=len(report['auctions']); report['day_count']=len(report['days'])
-    with open(OUT,'w',encoding='utf-8') as f: json.dump(report,f,indent=2,default=str)
+    write_report(report)
     print(json.dumps({'status':'completed','target_month':report['target_month'],'day_count':report['day_count'],'auction_count':report['auction_count']},indent=2),flush=True)
 
 if __name__=='__main__':

@@ -17,26 +17,19 @@ jobs:
     env:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       PYTHONUNBUFFERED: '1'
+      PYTHON_EXE: 'C:\Users\admin\AppData\Local\Programs\Python\Python311\python.exe'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Locate local Python 3.11
+      - name: Verify Python 3.11
         shell: powershell
         run: |
-          $candidates = @(
-            'C:\Program Files\Python311\python.exe',
-            'C:\Program Files\Python311-64\python.exe'
-          )
-          $userPythons = Get-ChildItem 'C:\Users\*\AppData\Local\Programs\Python\Python311\python.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
-          $candidates += $userPythons
-          $python = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $python) {
-            throw 'Python 3.11 executable was not found in expected Windows install locations'
+          if (-not (Test-Path $env:PYTHON_EXE)) {
+            throw "Verified Python path is not accessible to runner service: $env:PYTHON_EXE"
           }
-          Write-Host "Using Python: $python"
-          "PYTHON_EXE=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          & $python --version
-          & $python -m pip --version
+          Write-Host "Using Python: $env:PYTHON_EXE"
+          & $env:PYTHON_EXE --version
+          & $env:PYTHON_EXE -m pip --version
 
       - name: Install dependencies
         shell: powershell

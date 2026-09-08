@@ -20,18 +20,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify local Python
+      - name: Locate local Python 3.11
         shell: powershell
         run: |
-          python --version
-          python -m pip --version
+          $candidates = @(
+            'C:\Program Files\Python311\python.exe',
+            'C:\Program Files\Python311-64\python.exe'
+          )
+          $userPythons = Get-ChildItem 'C:\Users\*\AppData\Local\Programs\Python\Python311\python.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+          $candidates += $userPythons
+          $python = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $python) {
+            throw 'Python 3.11 executable was not found in expected Windows install locations'
+          }
+          Write-Host "Using Python: $python"
+          "PYTHON_EXE=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $python --version
+          & $python -m pip --version
 
       - name: Install dependencies
         shell: powershell
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install playwright psycopg2-binary
-          python -m playwright install chromium
+          & $env:PYTHON_EXE -m pip install --upgrade pip
+          & $env:PYTHON_EXE -m pip install playwright psycopg2-binary
+          & $env:PYTHON_EXE -m playwright install chromium
 
       - name: Require correct Supabase project
         shell: powershell
@@ -47,7 +59,7 @@ jobs:
         shell: powershell
         timeout-minutes: 20
         run: |
-          python -u scrape_realforeclose_month.py 2>&1 | Tee-Object -FilePath realforeclose_month.log
+          & $env:PYTHON_EXE -u scrape_realforeclose_month.py 2>&1 | Tee-Object -FilePath realforeclose_month.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - uses: actions/upload-artifact@v4

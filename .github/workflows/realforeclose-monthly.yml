@@ -18,6 +18,7 @@ jobs:
       SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
       PYTHONUNBUFFERED: '1'
       PYTHON_EXE: 'C:\Program Files\Python311\python.exe'
+      REALFORECLOSE_PROFILE_DIR: 'C:\actions-runner\_realforeclose-profile'
     steps:
       - uses: actions/checkout@v4
 
@@ -64,5 +65,7 @@ jobs:
           path: |
             realforeclose_month.log
             realforeclose_month_probe.json
+            realforeclose_calendar_block.html
+            realforeclose_calendar_block.png
           retention-days: 30
           if-no-files-found: warn

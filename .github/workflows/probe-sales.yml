@@ -3,20 +3,17 @@ name: Probe Polk Sales Feed
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths:
-      - "probe_sales.py"
-      - ".github/workflows/probe-sales.yml"
+      - 'probe_polk_sales.py'
+      - '.github/workflows/probe-sales.yml'
 
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     permissions:
       contents: read
-    env:
-      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-      PYTHONUNBUFFERED: "1"
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,35 +21,19 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.11'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Require Supabase secret
+      - name: Probe official Polk sales feed
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
-          case "$SUPABASE_DB_URL" in
-            *bnsmnztxkqmphvbikaxh*) ;;
-            *) echo "Refusing to probe: SUPABASE_DB_URL does not identify project bnsmnztxkqmphvbikaxh"; exit 3 ;;
-          esac
-
-      - name: Probe sales feed
-        shell: bash
-        run: |
-          set -euo pipefail
-          python probe_sales.py | tee sales_probe.log
+          python probe_polk_sales.py | tee sales_probe.log
 
       - name: Upload sales probe evidence
-        if: ${{ always() }}
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sales-probe-${{ github.run_id }}
-          if-no-files-found: ignore
+          name: polk-sales-probe-${{ github.run_id }}
+          path: sales_probe.log
           retention-days: 30
-          path: |
-            sales_probe.log
-            ftp_sales.zip
+          if-no-files-found: warn

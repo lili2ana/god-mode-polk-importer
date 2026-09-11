@@ -99,20 +99,50 @@ def _strip_outer_csv_quotes(value: str) -> str:
     return value.strip('"')
 
 
+def _parse_legal_record_start(line: str):
+    """Return (structural_fields, dscr_tail) when a physical line begins a legal record.
+
+    Polk's first seven fields are coded numeric identifiers. DSCR is free text and may
+    contain commas, quote marks, and embedded physical newlines. A physical line that
+    does not begin with seven valid numeric structural fields is therefore treated as a
+    continuation of the prior DSCR instead of an immediate fatal parse error.
+    """
+    parts = line.rstrip("\r\n").split(",", 7)
+    if len(parts) != 8:
+        return None
+    structural = [_strip_outer_csv_quotes(v) for v in parts[:7]]
+    if not all(v.isdigit() for v in structural):
+        return None
+    return structural, _strip_outer_csv_quotes(parts[7])
+
+
 def _iter_legal_rows(stage: FeedStage, data_file: Path):
     """Parse Polk legal rows using the verified seven-field structural boundary.
 
-    Polk's DSCR field contains unescaped survey seconds/inch marks such as 10" E.
-    A standards-based CSV reader can therefore merge physical records or split DSCR
-    into extra fields. The first seven source fields are coded identifiers and contain
-    no commas; split each physical record at only the first seven commas, then preserve
-    the entire remaining tail as DSCR. Fail closed if the structural boundary changes.
+    The first seven source fields are coded numeric identifiers and define the start
+    of a logical record. DSCR is allowed to span multiple physical lines. Continuation
+    lines are appended to the pending DSCR. Lines that cannot be attached to a logical
+    record are quarantined and logged instead of aborting the entire feed.
     """
     expected = len(stage.columns)
     if expected != 8:
         raise ValueError(f"legal parser expects 8 configured columns, got {expected}")
 
-    with open(data_file, "r", encoding=stage.encoding, newline="") as f:
+    quarantine_path = WORKDIR / "legal_quarantine.txt"
+    quarantine_count = 0
+    continuation_count = 0
+    pending_structural = None
+    pending_dscr_parts = []
+    pending_start_line = None
+
+    def flush_pending():
+        if pending_structural is None:
+            return None
+        dscr = " ".join(p for p in pending_dscr_parts if p).strip()
+        return tuple(list(pending_structural) + [dscr])
+
+    with open(data_file, "r", encoding=stage.encoding, newline="") as f, \
+         open(quarantine_path, "w", encoding="utf-8", newline="") as quarantine:
         if stage.has_header:
             header_line = f.readline()
             header_parts = header_line.rstrip("\r\n").split(",", 7)
@@ -124,26 +154,41 @@ def _iter_legal_rows(stage: FeedStage, data_file: Path):
         for physical_line_no, line in enumerate(f, start=2 if stage.has_header else 1):
             if not line.strip():
                 continue
-            parts = line.rstrip("\r\n").split(",", 7)
-            if len(parts) != 8:
-                raise ValueError(
-                    f"legal structural parse failure at physical line {physical_line_no}: "
-                    f"expected 7 structural fields + DSCR tail, got {len(parts)} pieces"
-                )
-            structural = [_strip_outer_csv_quotes(v) for v in parts[:7]]
-            if any(',' in v for v in structural):
-                raise ValueError(
-                    f"legal structural field contains comma at physical line {physical_line_no}: {structural!r}"
-                )
-            if not all(v.isdigit() for v in structural):
-                raise ValueError(
-                    f"legal structural field is not coded/numeric at physical line {physical_line_no}: {structural!r}"
-                )
-            dscr = _strip_outer_csv_quotes(parts[7])
-            row = tuple(structural + [dscr])
+
+            parsed = _parse_legal_record_start(line)
+            if parsed is not None:
+                row = flush_pending()
+                if row is not None:
+                    if len(row) != 8:
+                        raise AssertionError(f"legal normalized width != 8 near physical line {pending_start_line}")
+                    yield row
+                pending_structural, dscr = parsed
+                pending_dscr_parts = [dscr]
+                pending_start_line = physical_line_no
+                continue
+
+            continuation = _strip_outer_csv_quotes(line).strip()
+            if pending_structural is not None:
+                if continuation:
+                    pending_dscr_parts.append(continuation)
+                    continuation_count += 1
+                continue
+
+            quarantine.write(f"{physical_line_no}\t{line.rstrip()}\n")
+            quarantine_count += 1
+
+        row = flush_pending()
+        if row is not None:
             if len(row) != 8:
-                raise AssertionError(f"legal normalized width != 8 at physical line {physical_line_no}")
+                raise AssertionError(f"legal normalized width != 8 near physical line {pending_start_line}")
             yield row
+
+    log.info(
+        "Legal parser recovery summary: continuation_lines=%d quarantined_unattached_lines=%d quarantine=%s",
+        continuation_count,
+        quarantine_count,
+        quarantine_path,
+    )
 
 
 def _iter_fixed_width_rows(stage: FeedStage, data_file: Path):

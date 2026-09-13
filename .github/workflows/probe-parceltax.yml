@@ -1,0 +1,35 @@
+name: Probe Polk Parcel Tax Feed
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "probe_polk_parceltax.py"
+      - ".github/workflows/probe-parceltax.yml"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Probe official Polk parcel-tax feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python probe_polk_parceltax.py | tee parceltax_probe.log
+      - name: Upload parcel-tax probe evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: polk-parceltax-probe-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 30
+          path: parceltax_probe.log

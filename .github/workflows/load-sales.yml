@@ -1,0 +1,60 @@
+name: Load Polk Sales Feed
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "load_polk_sales.py"
+      - ".github/workflows/load-sales.yml"
+
+concurrency:
+  group: polk-sales-production-load
+  cancel-in-progress: false
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SALES_PARTITIONS: "32"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependency
+        run: pip install psycopg2-binary
+
+      - name: Require correct Supabase target
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
+          case "$SUPABASE_DB_URL" in
+            *bnsmnztxkqmphvbikaxh*) ;;
+            *) echo "Refusing to run: unexpected Supabase project"; exit 3 ;;
+          esac
+
+      - name: Load and verify official Polk sales feed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python load_polk_sales.py | tee sales_load.log
+
+      - name: Upload verification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: polk-sales-load-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: ignore
+          path: sales_load.log

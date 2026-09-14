@@ -1,5 +1,6 @@
 """Integration tests run only against the disposable localhost CI database."""
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,6 +18,10 @@ TEST_DSN=os.getenv('POLK_TEST_DB_URL')
 @unittest.skipUnless(TEST_DSN, 'requires disposable localhost PostgreSQL')
 class SalesPostgresTests(unittest.TestCase):
     def setUp(self):
+        self.unraisable=[]
+        previous_hook=sys.unraisablehook
+        sys.unraisablehook=self.unraisable.append
+        self.addCleanup(setattr,sys,'unraisablehook',previous_hook)
         parts=parse_dsn(TEST_DSN)
         if parts.get('host') not in ('localhost','127.0.0.1') or parts.get('dbname')!='postgres' or parts.get('port')!='55432':
             raise RuntimeError('Integration tests require localhost:55432/postgres')
@@ -37,6 +42,9 @@ class SalesPostgresTests(unittest.TestCase):
         self.rows=[sample(line=str(i)) for i in range(1,4)]
         self.manifest,self.local=fixture(self.root,self.rows)
         self.addCleanup(self.local.close)
+
+    def tearDown(self):
+        self.assertEqual(self.unraisable,[], 'Resource cleanup must not hide exceptions')
 
     def stage(self,rows):
         with self.conn,self.conn.cursor() as cur:

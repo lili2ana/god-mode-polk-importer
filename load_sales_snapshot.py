@@ -27,6 +27,13 @@ def scan(conn, table):
         yield from cursor
 
 
+def reconcile_table(conn, local, table, production=False):
+    # Close server-side cursors before the surrounding transaction rolls back
+    # when a field mismatch raises midway through a streaming comparison.
+    with closing(scan(conn, table)) as rows:
+        return reconcile(local, rows, production=production)
+
+
 def load(conn, local, manifest, workdir):
     with conn.cursor() as cursor:
         require_writable(cursor)
@@ -41,7 +48,7 @@ def load(conn, local, manifest, workdir):
                 require_writable(cursor)
                 cursor.execute("SET LOCAL lock_timeout = '5s'")
                 cursor.execute('LOCK TABLE public.polk_sales_stage_v2 IN SHARE ROW EXCLUSIVE MODE')
-            existing = reconcile(local, scan(conn, 'polk_sales_stage_v2'))
+            existing = reconcile_table(conn, local, 'polk_sales_stage_v2')
         print(f'resumable_stage_rows={existing}', flush=True)
         for shard in range(manifest['partitions']):
             shard_path = workdir / f'missing-{shard:02d}.csv'
@@ -70,7 +77,7 @@ def load(conn, local, manifest, workdir):
                 cursor.execute('LOCK TABLE public.polk_sales_stage_v2 IN ACCESS EXCLUSIVE MODE')
                 cursor.execute('LOCK TABLE public.polk_sales_v2 IN EXCLUSIVE MODE')
                 cursor.execute('LOCK TABLE public.god_mode_feed_status IN SHARE ROW EXCLUSIVE MODE')
-            staged = reconcile(local, scan(conn, 'polk_sales_stage_v2'))
+            staged = reconcile_table(conn, local, 'polk_sales_stage_v2')
             if staged != manifest['rows']:
                 raise ValueError('Staging coverage is incomplete; production untouched')
             updates = ','.join(f'{c}=excluded.{c}' for c in COLUMNS if c not in ('parcel_id','ln_num'))
@@ -83,7 +90,7 @@ def load(conn, local, manifest, workdir):
                         WHERE left(btrim(parcel_id),3)=%s
                         ON CONFLICT (parcel_id,ln_num) DO UPDATE SET {updates},updated_at=now()''', (prefix,))
                     print(f'pending_prefix={prefix} rows={cursor.rowcount}', flush=True)
-            production = reconcile(local, scan(conn, 'polk_sales_v2'), production=True)
+            production = reconcile_table(conn, local, 'polk_sales_v2', production=True)
             if production != manifest['rows']:
                 raise ValueError('Production coverage is incomplete; publication rolled back')
             with conn.cursor() as cursor:

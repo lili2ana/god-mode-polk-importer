@@ -4,6 +4,8 @@ on:
     paths:
       - '*.py'
       - 'tests/**'
+      - 'supabase/migrations/**'
+      - 'importer_parts/**'
       - 'requirements-test.txt'
       - '.github/workflows/test-sales-recovery.yml'
       - '.github/workflows/load-sales.yml'

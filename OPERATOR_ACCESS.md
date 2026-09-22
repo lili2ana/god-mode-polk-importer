@@ -15,8 +15,10 @@ service connection; redirects are rejected. Responses are JSON/no-store, without
 upstream headers, cookies or wildcard CORS. Auth and read calls have bounded
 timeouts. Source failures produce generic errors without logging tokens or data.
 
-This is a backend bearer-token adapter, not a login page, session issuer, cookie
-store, token refresher or production access grant. It has no account-creation or
+This function is a backend bearer-token adapter. The separately runnable
+[operator web interface](operator-web/README.md) now supplies a local sign-in,
+refresh, sign-out and dashboard/CRM UI, with Auth tokens held on the server.
+It is not deployed or verified with production login. The gateway has no account-creation or
 email-sending behavior. `getUser` is used for a fresh server-confirmed user record,
 not `getSession` or unchecked client claims; see the
 [Supabase authentication guidance](https://supabase.com/docs/guides/getting-started/tutorials/with-nextjs).
@@ -26,7 +28,8 @@ not `getSession` or unchecked client claims; see the
 1. The operator email has been selected and recorded privately; do not put it in
    source code or assume mailbox ownership from that selection. Bind the approved account
    to its actual Auth UUID; do not authorize an email or user-editable metadata.
-2. Implement and verify the chosen login/refresh/logout route and frontend host.
+2. Verify the implemented local login/refresh/logout routes with actual Auth and
+   configure the email sender/template before enabling code delivery.
    No CORS is configured here: use a same-origin server integration, or separately
    implement and test an explicit origin policy. Do not put machine credentials
    into browser code to work around this boundary.

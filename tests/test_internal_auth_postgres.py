@@ -40,13 +40,14 @@ class InternalAuthPostgresTests(unittest.TestCase):
             c.execute(MIGRATION.with_name('20260922054152_private_internal_transport.sql').read_text())
             c.execute(MIGRATION.with_name('20260922054310_synchronous_private_workers.sql').read_text())
             c.execute(MIGRATION.with_name('20260922060527_secure_title_access_worker.sql').read_text(encoding='utf-8'))
+            c.execute(MIGRATION.with_name('20260922080459_secure_dashboard_counts.sql').read_text(encoding='utf-8'))
 
     def q(self,sql,args=None):
         with self.db,self.db.cursor() as c:
             c.execute(sql,args); return c.fetchone() if c.description else None
 
     def test_fresh_unique_credentials_with_no_table_grants(self):
-        self.assertEqual(self.q('SELECT count(*),count(DISTINCT token_digest) FROM god_mode_ops.internal_function_credentials'),(4,4))
+        self.assertEqual(self.q('SELECT count(*),count(DISTINCT token_digest) FROM god_mode_ops.internal_function_credentials'),(5,5))
         self.assertEqual(self.q("SELECT has_table_privilege('anon','god_mode_ops.internal_function_credentials','SELECT'),has_table_privilege('service_role','god_mode_ops.internal_function_credentials','SELECT')"),(False,False))
         self.assertEqual(self.q("SELECT has_function_privilege('anon','public.god_mode_check_internal_token(text,text)','EXECUTE'),has_function_privilege('authenticated','public.god_mode_check_internal_token(text,text)','EXECUTE'),has_function_privilege('service_role','public.god_mode_check_internal_token(text,text)','EXECUTE')"),(False,False,True))
 
@@ -92,3 +93,12 @@ class InternalAuthPostgresTests(unittest.TestCase):
         self.q("SELECT god_mode_ops.invoke_internal_worker('god-mode-title-access-worker',false,1)")
         self.assertEqual(self.q("SELECT method,url LIKE '%god-mode-title-access-worker?limit=1' FROM net.requests"),('POST',True))
         self.assertEqual(self.q("SELECT count(*) FROM cron.job WHERE command LIKE '%title-access%'"),(0,))
+
+    def test_dashboard_scope_is_independent_and_dispatcher_health_only(self):
+        digest=self.q("SELECT token_digest FROM god_mode_ops.internal_function_credentials WHERE scope='god-mode-dashboard'")[0]
+        self.assertEqual(self.q("SELECT public.god_mode_check_internal_token('god-mode-dashboard',%s)",(digest,)),(True,))
+        self.assertEqual(self.q("SELECT public.god_mode_check_internal_token('god-mode-crm-feed',%s)",(digest,)),(False,))
+        with self.assertRaises(psycopg2.Error): self.q("SELECT god_mode_ops.invoke_internal_worker('god-mode-dashboard',false,1)")
+        self.assertEqual(self.q('SELECT count(*) FROM net.requests'),(0,))
+        self.q("SELECT god_mode_ops.invoke_internal_worker('god-mode-dashboard',true,1)")
+        self.assertEqual(self.q("SELECT method,url LIKE '%god-mode-dashboard?check=auth' FROM net.requests"),('GET',True))

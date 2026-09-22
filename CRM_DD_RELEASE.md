@@ -1,4 +1,4 @@
-# CRM and due-diligence security release â€” September 22, 2026
+# CRM and due-diligence security release — September 22, 2026
 
 The CRM feed and two daily DD functions now authorize requests before business
 queries. Anonymous requests, public keys, forged credentials and cross-worker
@@ -67,7 +67,7 @@ verify old GIS findings or existing property values.
 - All three endpoints rejected anonymous, forged scoped and invalid public-key
   probes with **401** (nine probes). CRM also rejected a valid DD token with 401.
 - Each endpoint returned **200** for its own scoped health check via the final
-  synchronous path, with no business side effects (requests 1000000â€“1000002).
+  synchronous path, with no business side effects (requests 1000000–1000002).
 - An authorized CRM read returned **200**, `ok=true`, and its capped **200-contact**
   page. Only status/count were inspected in output; no outreach was performed.
 - Finalizer request **1000004** and worker request **1000005** each returned 200,

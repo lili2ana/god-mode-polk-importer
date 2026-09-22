@@ -45,6 +45,20 @@ tests exercise the new token, isolated scope, GET health routing, denial of data
 dispatch and unchanged schedules. Deployment is not LIVE until source retrieval,
 negative probes and an authorized production read agree with the database.
 
+LIVE evidence on September 22: dashboard **v3** retrieved source matched all three
+repository files. Anonymous, forged-scope, public-key and valid wrong-scope probes
+returned **401**. Scoped health request **1000010** returned 200. The authorized
+JSON read returned 200/ok=true and all five counts matched independent SQL counts;
+acquisition/outreach authorization both remained false. The first read hit the SQL
+HTTP extension's five-second timeout; a bounded twenty-second read-only retry
+succeeded and restored the previous timeout. This is not a low-latency guarantee.
+
+CI run **35703170766** passed **67 Python/PostgreSQL 17** and **42 Deno** tests
+(109 total) at `4615a82631144689038b72a671a6b8c5a9fc0b96`. The five credential hashes
+are distinct; ordinary roles remain denied access to the dispatcher/auth RPC.
+Private tables retain intentional default-deny RLS, consistent with the
+[Supabase advisor](https://supabase.com/docs/guides/database/database-linter?lint=0008_rls_enabled_no_policy).
+
 Preserve the private v2 source for audit, never as an unauthenticated rollback.
 For a regression, disable this scope or deploy a corrected authenticated handler.
 No production records require restoration because the handler never writes them.

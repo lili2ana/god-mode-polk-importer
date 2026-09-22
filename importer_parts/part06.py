@@ -244,6 +244,9 @@ def main():
                          help="Read-only: print stage/production row counts and persistent Supabase verification state, then exit.")
     args = parser.parse_args()
 
+    if not args.verify_only and not (args.dry_run and args.mode == 'staging' and not args.merge_only):
+        parser.error('Countywide writes are disabled; build and reconcile lean property snapshots')
+
     if args.verify_only:
         conn = get_db_connection()
         try:

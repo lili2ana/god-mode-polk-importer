@@ -135,11 +135,3 @@ jobs:
           name: legal-parser-reconciliation-${{ github.run_id }}
           retention-days: 30
           path: legal_parser_reconciliation.json
-
-      - name: Retain raw source briefly while feed is diagnostic
-        uses: actions/upload-artifact@v4
-        with:
-          name: legal-raw-source-${{ github.run_id }}
-          retention-days: 3
-          compression-level: 0
-          path: ftp_legal.zip

@@ -1,5 +1,10 @@
 # Lean operational pipeline
 
+The September 22 property-profile release is recorded in `PROPERTY_RELEASE.md`.
+It adds private remote source archival with tested restores, parcel/owner/legal
+snapshots and the deployed target-refresh correction. The earlier tax evidence
+below remains an offline snapshot and has not been promoted to production.
+
 Countywide production loading is superseded. Keep raw county data outside the
 operational database, prove reduced snapshots alongside existing tables, and only
 then switch readers. No existing countywide table or staging data is deleted by

@@ -1,3 +1,111 @@
+import { buildHandler as dashboard } from "../god-mode-dashboard/handler.ts";
+
+function dashboardFixture(counts: unknown[] = [10, 6, 4, 3, 1], fail = false) {
+  const reads: any[] = [];
+  let index = 0;
+  const handler = dashboard({
+    env: (name) =>
+      ({
+        SUPABASE_URL: "https://example.invalid",
+        SUPABASE_SECRET_KEYS: JSON.stringify({
+          default: "sb_secret_test_backend_only",
+        }),
+      } as Record<string, string>)[name],
+    createClient: () => ({
+      from: (table: string) => {
+        const i = index++;
+        const chain: any = {
+          select: (columns: string, opts: unknown) => {
+            reads.push({ table, columns, opts });
+            return chain;
+          },
+          eq: () => chain,
+          then: (resolve: any) =>
+            resolve({
+              count: counts[i],
+              error: fail && i === 2
+                ? { message: "private database error" }
+                : null,
+            }),
+        };
+        return chain;
+      },
+    }),
+  });
+  return { handler, reads };
+}
+const dashboardRequest = (format: string) =>
+  new Request(`https://example.invalid?format=${format}`, {
+    headers: { apikey: "sb_secret_test_backend_only" },
+  });
+Deno.test("dashboard: authorized read exposes only aggregate counts with no acquisition permission", async () => {
+  const f = dashboardFixture();
+  const r = await f.handler(dashboardRequest("json"));
+  eq(r.status, 200);
+  eq(r.headers.get("cache-control"), "no-store");
+  const b = await r.json();
+  eq(b.counts, {
+    properties: 10,
+    residential: 6,
+    land: 4,
+    preliminary_leads: 3,
+    hot_preliminary_leads: 1,
+  });
+  eq(b.acquisition_authorized, false);
+  eq(b.outreach_authorized, false);
+  eq(f.reads.length, 5);
+  for (const read of f.reads) {
+    eq(read.columns, "id");
+    eq(read.opts, { count: "exact", head: true });
+  }
+});
+Deno.test("dashboard: unknown, malformed and errored counts do not become zero", async () => {
+  for (
+    const value of [
+      null,
+      undefined,
+      -1,
+      "12",
+      "<script>alert(1)</script>",
+      NaN,
+      Infinity,
+    ]
+  ) {
+    const r = await dashboardFixture([10, 6, value, 3, 1]).handler(
+      dashboardRequest("html"),
+    );
+    eq(r.status, 503);
+    eq((await r.json()).error, "Inventory counts unavailable");
+  }
+  const r = await dashboardFixture([10, 6, 4, 3, 1], true).handler(
+    dashboardRequest("json"),
+  );
+  eq(r.status, 503);
+  eq((await r.text()).includes("private database error"), false);
+});
+Deno.test("dashboard: HTML preserves genuine zeros and never claims full pipeline verification", async () => {
+  const r = await dashboardFixture([0, 0, 0, 0, 0]).handler(
+    dashboardRequest("html"),
+  );
+  eq(r.status, 200);
+  const html = await r.text();
+  eq(html.includes('class="n">0'), true);
+  eq(html.includes("Underwriting review required"), true);
+  eq(html.includes("● LIVE"), false);
+  eq(html.includes("sb_secret_"), false);
+  eq(html.includes("<script"), false);
+  eq(
+    r.headers.get("content-security-policy")?.includes(
+      "frame-ancestors 'none'",
+    ),
+    true,
+  );
+});
+Deno.test("dashboard: invalid representation performs no inventory queries", async () => {
+  const f = dashboardFixture();
+  eq((await f.handler(dashboardRequest("raw"))).status, 400);
+  eq(f.reads, []);
+});
 import { buildHandler as worker } from "../god-mode-dd-worker/handler.ts";
 import { buildHandler as finalize } from "../god-mode-dd-finalize/handler.ts";
 import { buildHandler as titleAccess } from "../god-mode-title-access-worker/handler.ts";
@@ -180,6 +288,7 @@ const handlers = [
     "POST",
   ],
   ["god-mode-crm-feed", crm, "GET"],
+  ["god-mode-dashboard", dashboard, "GET"],
   ["god-mode-title-access-worker", titleAccess, "POST"],
 ] as const;
 for (const [scope, build, method] of handlers) {

@@ -8,6 +8,33 @@ from build_target_tax_snapshot import digest, parcel_key
 from property_source import HEADERS
 
 
+SOURCE_REVIEW_CLASSES = {
+    '9910': ('Inaccessible tracts', 'county_inaccessible_tract'),
+    '9350': ('Mineral Rights (Not Phos.)', 'county_mineral_rights'),
+    '0989': ('Split and/or Combine in Progress', 'county_split_combine'),
+}
+
+
+def source_review_flags(parcel_rows):
+    """Observed county labels are review evidence, never legal conclusions."""
+    flags = []
+    for row in parcel_rows:
+        code, description = row['DORUS_CODE'].strip(), row['DORDESC1'].strip()
+        contract = SOURCE_REVIEW_CLASSES.get(code)
+        description_match = next((item for item in SOURCE_REVIEW_CLASSES.values()
+                                  if item[0].casefold() == description.casefold()), None)
+        if contract or description_match:
+            expected, reason = contract or description_match
+            flags.append({'reason': reason, 'feed': 'parcel',
+                          'source_code': code, 'source_description': description,
+                          'legal_conclusion_verified': False})
+            if contract is None or expected.casefold() != description.casefold():
+                flags.append({'reason': 'county_classification_mismatch', 'feed': 'parcel',
+                              'source_code': code, 'source_description': description,
+                              'legal_conclusion_verified': False})
+    return flags
+
+
 class PropertyProfiles:
     def __init__(self, directory):
         root = Path(directory)
@@ -31,5 +58,7 @@ class PropertyProfiles:
                     'rows': [dict(zip(header, json.loads(r[0]))) for r in records]}
                 if feed == 'legal':
                     result['feeds'][feed]['raw_source_records'] = [r[1] for r in records]
-            result['review_required'] = bool(result['missing_feeds'])
+            result['source_review_flags'] = source_review_flags(result['feeds']['parcel']['rows'])
+            result['feed_completeness_review_required'] = bool(result['missing_feeds'])
+            result['review_required'] = bool(result['missing_feeds'] or result['source_review_flags'])
             return result

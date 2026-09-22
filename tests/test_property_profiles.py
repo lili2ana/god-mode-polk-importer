@@ -11,7 +11,7 @@ from pathlib import Path
 
 from build_property_snapshot import build, row_digest
 from build_target_tax_snapshot import PROJECT, digest
-from property_profile import PropertyProfiles
+from property_profile import PropertyProfiles, source_review_flags
 from property_source import HEADERS, legal_rows
 
 KEY = '123456789012345678'
@@ -58,6 +58,40 @@ class PropertyProfileTests(unittest.TestCase):
         profile = PropertyProfiles(self.root / 'out').get(KEY)
         self.assertEqual(profile['missing_feeds'], ['owner'])
         self.assertTrue(profile['review_required'])
+        self.assertFalse(profile['eligible_for_automated_acquisition'])
+
+    def test_complete_inaccessible_profile_still_requires_review(self):
+        self.data['parcel'][0][6:9] = ['9910', 'MISC', 'Inaccessible tracts']
+        build(self.root, self.archives(), self.target, self.root / 'out')
+        profile = PropertyProfiles(self.root / 'out').get(KEY)
+        self.assertEqual(profile['missing_feeds'], [])
+        self.assertFalse(profile['feed_completeness_review_required'])
+        self.assertTrue(profile['review_required'])
+        self.assertFalse(profile['production_verified'])
+        self.assertFalse(profile['eligible_for_automated_acquisition'])
+        self.assertEqual(profile['source_review_flags'][0]['reason'], 'county_inaccessible_tract')
+        self.assertFalse(profile['source_review_flags'][0]['legal_conclusion_verified'])
+
+    def test_mineral_and_split_classifications_keep_exact_source_evidence(self):
+        for code, description, reason in [
+            ('9350', 'Mineral Rights (Not Phos.)', 'county_mineral_rights'),
+            ('0989', 'Split and/or Combine in Progress', 'county_split_combine'),
+        ]:
+            flags = source_review_flags([{'DORUS_CODE':code, 'DORDESC1':description}])
+            self.assertEqual([f['reason'] for f in flags], [reason])
+            self.assertEqual(flags[0]['source_description'], description)
+            self.assertFalse(flags[0]['legal_conclusion_verified'])
+
+    def test_classification_code_description_disagreement_never_silently_clears(self):
+        for code, description in [('9910','Res. Lakefront'),('0180','Inaccessible tracts')]:
+            flags=source_review_flags([{'DORUS_CODE':code,'DORDESC1':description}])
+            self.assertIn('county_classification_mismatch', [f['reason'] for f in flags])
+
+    def test_ordinary_source_classification_is_not_promoted_to_legal_clearance(self):
+        self.assertEqual(source_review_flags([{'DORUS_CODE':'0180','DORDESC1':'Res. Lakefront'}]), [])
+        build(self.root, self.archives(), self.target, self.root / 'out')
+        profile=PropertyProfiles(self.root / 'out').get(KEY)
+        self.assertEqual(profile['source_review_flags'], [])
         self.assertFalse(profile['eligible_for_automated_acquisition'])
 
     def test_missing_parcel_blocks(self):

@@ -42,4 +42,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npx --yes deno@2.5.2 test supabase/functions/tests/security_test.ts
+      - run: npx --yes deno@2.5.2 test supabase/functions/tests

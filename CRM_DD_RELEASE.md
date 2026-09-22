@@ -98,7 +98,18 @@ Write/conflict/audit failures return `ok=false`; no contact information is retur
 
 The migration extends the fixed private dispatcher without changing daily schedules
 or rotating the existing CRM/DD credentials. Title/access remains manually invoked.
-At code preparation this follow-up is READY, pending CI and production verification.
+This follow-up is LIVE: title/access version **5** was deployed, and all three
+retrieved source files matched the repository. Anonymous, forged-scope and public-key
+probes returned **401**. Dedicated scoped health request **1000007** returned 200;
+real one-review request **1000008** returned 200, `ok=true`, processed one and
+reported zero errors. Before/after fingerprints confirmed every status and all
+unrelated findings were preserved. Title clearance, verified road proximity and
+legal access remained false. The original v4 source is retained privately.
+
+CI run **35693537763** passed all **66 Python/PostgreSQL 17** and **34 Deno** tests
+at implementation head `4195ba5fc23ee691b81986f2dd705580dc7f053e` (100 tests).
+The four credential hashes are distinct; ordinary roles still cannot invoke the
+dispatcher or authentication RPC. No title/access schedule was installed.
 Rollback means deploying a corrected authenticated handler or disabling its scoped
 credential; never redeploy the unauthenticated original.
 

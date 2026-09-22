@@ -1,5 +1,5 @@
 // Single-process private web interface. No Auth tokens are stored in the browser.
-type Tokens = {
+export type Tokens = {
   access_token: string;
   refresh_token: string;
   expires_at: number;
@@ -14,6 +14,11 @@ export type WebDependencies = {
   refresh: (token: string) => Promise<Tokens & { userId: string }>;
   logout: (token: string) => Promise<void>;
   read: (token: string, view: "dashboard" | "crm") => Promise<Response>;
+  microsoft?: (callback: string) => Promise<{
+    url: string;
+    exchange: (code: string) => Promise<Tokens & { userId: string }>;
+    dispose: () => void;
+  }>;
   now?: () => number;
 };
 const escape = (v: unknown) =>
@@ -29,7 +34,7 @@ const escape = (v: unknown) =>
   );
 const frame = (body: string) =>
   `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>God Mode · Private workspace</title><style>body{background:#101923;color:#e8eef4;font:17px system-ui;max-width:900px;margin:5vh auto;padding:24px}header{color:#91adbd;letter-spacing:.1em}h1{font-size:36px}section{background:#192837;border:1px solid #304555;border-radius:16px;padding:24px;margin:24px 0}button,a{color:#a4e8d2}button{background:#24574a;border:1px solid #69baa0;border-radius:8px;padding:12px 20px;font:inherit;cursor:pointer}input{font:inherit;padding:12px;border-radius:8px;max-width:180px}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:12px;border-bottom:1px solid #304555}nav{display:flex;gap:24px}p{line-height:1.6}.muted{color:#a5b9c9}</style></head><body><header>GOD MODE / PRIVATE WORKSPACE</header>${body}<p class="muted">Seller outreach is off. Preliminary signals are not verified valuations or acquisition approval.</p></body></html>`;
-const login =
+const emailLogin =
   `<h1>Your private deal workspace</h1><section><h2>Sign in</h2><p>Send a one-time code to your approved email address. Enter it here to open your dashboard and CRM.</p><form method="post" action="/request-code"><button>Send my sign-in code</button></form></section>`;
 const verify =
   `<h1>Check your email</h1><section><p>Enter the six-digit sign-in code. Never share it in chat.</p><form method="post" action="/verify-code"><label for="code">Sign-in code</label> <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required><button>Open workspace</button></form></section>`;
@@ -48,6 +53,10 @@ export function buildWeb(deps: WebDependencies) {
   }
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
+  type Flow =
+    & { deadline: number; processing: boolean }
+    & Awaited<ReturnType<NonNullable<WebDependencies["microsoft"]>>>;
+  const flows = new Map<string, Flow>();
   const cookieName = origin.protocol === "https:"
     ? "__Host-godmode"
     : "godmode_local";
@@ -55,6 +64,16 @@ export function buildWeb(deps: WebDependencies) {
     `${cookieName}=${id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${
       origin.protocol === "https:" ? "; Secure" : ""
     }`;
+  const flowCookieName = origin.protocol === "https:"
+    ? "__Host-godmode_oauth"
+    : "godmode_oauth_local";
+  const flowCookie = (id: string, age: number) =>
+    `${flowCookieName}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${
+      origin.protocol === "https:" ? "; Secure" : ""
+    }`;
+  const login = deps.microsoft
+    ? `<h1>Your private deal workspace</h1><section><h2>Sign in</h2><p>Use your approved Microsoft account to open your dashboard and CRM.</p><form method="post" action="/oauth/start"><button>Continue with Microsoft</button></form></section>`
+    : emailLogin;
   const page = (
     body: string,
     status = 200,
@@ -77,7 +96,22 @@ export function buildWeb(deps: WebDependencies) {
       location: "/",
       "set-cookie": cookie(id, age),
     });
-  let lastSend = -Infinity, attemptWindow = 0, attempts = 0;
+  let lastSend = -Infinity,
+    lastOAuth = -Infinity,
+    attemptWindow = 0,
+    attempts = 0;
+  const readCookie = (req: Request, name: string) => {
+    const values = (req.headers.get("cookie") ?? "").split(";").map((x) =>
+      x.trim()
+    )
+      .filter((x) => x.startsWith(name + "="));
+    return values.length === 1 ? values[0].slice(name.length + 1) : "";
+  };
+  function removeFlow(id: string) {
+    const flow = flows.get(id);
+    flows.delete(id);
+    flow?.dispose();
+  }
   function validTokens(value: Tokens & { userId: string }) {
     return value.userId === deps.operatorId &&
       typeof value.access_token === "string" &&
@@ -85,6 +119,31 @@ export function buildWeb(deps: WebDependencies) {
       typeof value.refresh_token === "string" &&
       value.refresh_token.length > 0 && Number.isFinite(value.expires_at) &&
       value.expires_at * 1000 > now();
+  }
+  async function issueSession(
+    tokens: Tokens & { userId: string },
+    oldId: string,
+    stillAllowed: () => boolean = () => true,
+  ) {
+    if (!validTokens(tokens) || !stillAllowed()) {
+      return page("<h1>Sign-in could not be verified.</h1>", 403);
+    }
+    const gate = await deps.read(tokens.access_token, "dashboard");
+    if (!gate.ok || (await gate.json())?.ok !== true || !stillAllowed()) {
+      return page("<h1>Workspace access is not ready.</h1>", 403);
+    }
+    if (sessions.size >= 50) {
+      return page("<h1>Sign-in temporarily unavailable.</h1>", 503);
+    }
+    sessions.delete(oldId);
+    const fresh = crypto.randomUUID() + crypto.randomUUID();
+    sessions.set(fresh, {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_at: tokens.expires_at,
+      deadline: now() + 8 * 3600000,
+    });
+    return redirect(fresh, 8 * 3600);
   }
   async function ready(id: string, session: Session) {
     if (session.expires_at * 1000 <= now() + 60000) {
@@ -113,7 +172,8 @@ export function buildWeb(deps: WebDependencies) {
     try {
       const url = new URL(req.url);
       if (
-        url.origin !== deps.origin || url.search ||
+        url.origin !== deps.origin ||
+        (url.search && url.pathname !== "/oauth/callback") ||
         req.headers.get("host") && req.headers.get("host") !== origin.host
       ) {
         return page("<h1>Invalid request</h1>", 400);
@@ -127,13 +187,121 @@ export function buildWeb(deps: WebDependencies) {
       for (const [key, session] of sessions) {
         if (session.deadline <= now()) sessions.delete(key);
       }
-      const matches = (req.headers.get("cookie") ?? "").split(";").map((x) =>
-        x.trim()
-      ).filter((x) => x.startsWith(cookieName + "="));
-      const id = matches.length === 1
-        ? matches[0].slice(cookieName.length + 1)
-        : "";
+      for (const [key, flow] of flows) {
+        if (flow.deadline <= now()) removeFlow(key);
+      }
+      const id = readCookie(req, cookieName);
+      const flowId = readCookie(req, flowCookieName);
       const session = sessions.get(id);
+      if (req.method === "POST" && url.pathname === "/oauth/start") {
+        if (!deps.microsoft) {
+          return page("<h1>Microsoft sign-in is not configured.</h1>", 503);
+        }
+        if (now() - lastOAuth < 10000 || flows.size >= 10) {
+          return page("<h1>Please wait before trying again.</h1>", 429);
+        }
+        lastOAuth = now();
+        removeFlow(flowId);
+        const fresh = crypto.randomUUID() + crypto.randomUUID();
+        const callback = `${deps.origin}/oauth/callback?flow=${fresh}`;
+        const started = await deps.microsoft(callback);
+        let authorize: URL;
+        try {
+          authorize = new URL(started.url);
+        } catch {
+          started.dispose();
+          return page(
+            "<h1>Microsoft sign-in is not configured safely.</h1>",
+            503,
+          );
+        }
+        if (
+          authorize.origin !== "https://bnsmnztxkqmphvbikaxh.supabase.co" ||
+          authorize.pathname !== "/auth/v1/authorize" || authorize.username ||
+          authorize.password || authorize.hash ||
+          authorize.searchParams.get("provider") !== "azure" ||
+          authorize.searchParams.get("redirect_to") !== callback ||
+          authorize.searchParams.get("code_challenge_method")?.toLowerCase() !==
+            "s256" ||
+          !/^[A-Za-z0-9_-]{43}$/.test(
+            authorize.searchParams.get("code_challenge") ?? "",
+          ) ||
+          ["provider", "redirect_to", "code_challenge", "code_challenge_method"]
+            .some((k) => authorize.searchParams.getAll(k).length !== 1)
+        ) {
+          started.dispose();
+          return page(
+            "<h1>Microsoft sign-in is not configured safely.</h1>",
+            503,
+          );
+        }
+        flows.set(fresh, {
+          ...started,
+          deadline: now() + 300000,
+          processing: false,
+        });
+        // An explicit navigation avoids cross-origin POST redirect/CSP ambiguity.
+        return page(
+          `<h1>Microsoft sign-in</h1><p><a href="${
+            escape(authorize.href)
+          }">Sign in with Microsoft</a></p>`,
+          200,
+          {
+            "set-cookie": flowCookie(fresh, 300),
+          },
+        );
+      }
+      if (req.method === "GET" && url.pathname === "/oauth/callback") {
+        const failed = () =>
+          page("<p>Return to sign-in.</p>", 303, {
+            location: "/signin-error",
+            "set-cookie": flowCookie("", 0),
+          });
+        const flow = flows.get(flowId);
+        const params = url.searchParams;
+        if (
+          !deps.microsoft || !flow || flow.processing ||
+          params.getAll("flow").length !== 1 ||
+          params.get("flow") !== flowId
+        ) return failed();
+        // Keep the entry while processing so logout/expiry can cancel an in-flight exchange.
+        flow.processing = true;
+        try {
+          const code = params.get("code") ?? "";
+          if (
+            params.getAll("code").length !== 1 ||
+            !/^[A-Za-z0-9_-]{16,2048}$/.test(code) ||
+            [...params.keys()].some((k) => !["code", "flow"].includes(k))
+          ) return failed();
+          const tokens = await flow.exchange(code);
+          const response = await issueSession(
+            tokens,
+            id,
+            () => flows.get(flowId) === flow && flow.deadline > now(),
+          );
+          if (response.status !== 303) return failed();
+          // First land on a public same-origin document so the next navigation
+          // sends the Strict workspace cookie after the cross-site callback.
+          response.headers.set("location", "/signed-in");
+          response.headers.append("set-cookie", flowCookie("", 0));
+          return response;
+        } catch {
+          return failed();
+        } finally {
+          removeFlow(flowId);
+        }
+      }
+      if (req.method === "GET" && url.pathname === "/signin-error") {
+        return page(
+          '<h1>Sign-in could not be completed</h1><p>Return to the workspace and try again. Access must be approved before private records can be shown.</p><a href="/">Return to sign-in</a>',
+          403,
+        );
+      }
+      if (req.method === "GET" && url.pathname === "/signed-in") {
+        return page(
+          '<h1>Continue to your workspace</h1><p><a href="/">Open dashboard and CRM</a></p>',
+        );
+      }
       if (req.method === "POST" && url.pathname === "/request-code") {
         if (!deps.emailEnabled) {
           return page(
@@ -194,23 +362,10 @@ export function buildWeb(deps: WebDependencies) {
           ) || !/^\d{6}$/.test(code)
         ) return page("<h1>Enter a six-digit code.</h1>", 400);
         const tokens = await deps.verifyCode(code);
-        if (!validTokens(tokens)) {
-          return page("<h1>Sign-in could not be verified.</h1>", 403);
-        }
-        // Prove the deployed read gateway accepts this operator before issuing a cookie.
-        const gate = await deps.read(tokens.access_token, "dashboard");
-        if (!gate.ok || (await gate.json())?.ok !== true) {
-          return page("<h1>Workspace access is not ready.</h1>", 403);
-        }
-        if (sessions.size >= 50) {
-          return page("<h1>Sign-in temporarily unavailable.</h1>", 503);
-        }
-        if (session) sessions.delete(id);
-        const fresh = crypto.randomUUID() + crypto.randomUUID();
-        sessions.set(fresh, { ...tokens, deadline: now() + 8 * 3600000 });
-        return redirect(fresh, 8 * 3600);
+        return await issueSession(tokens, id);
       }
       if (req.method === "POST" && url.pathname === "/logout") {
+        removeFlow(flowId);
         if (session) {
           sessions.delete(id); // Local access ends even if the remote call fails.
           try {

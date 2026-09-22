@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import { buildWeb } from "./handler.ts";
+import { microsoftLogin } from "./microsoft.ts";
 
 const project = "https://bnsmnztxkqmphvbikaxh.supabase.co";
 function required(name: string) {
@@ -41,6 +42,9 @@ const handler = buildWeb({
   origin,
   operatorId,
   emailEnabled: Deno.env.get("GOD_MODE_LOGIN_EMAIL_ENABLED") === "true",
+  microsoft: Deno.env.get("GOD_MODE_MICROSOFT_LOGIN_ENABLED") === "true"
+    ? microsoftLogin(key, boundedFetch)
+    : undefined,
   sendCode: async () => {
     const { error } = await auth().auth.signInWithOtp({
       email,

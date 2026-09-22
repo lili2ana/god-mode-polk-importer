@@ -7,7 +7,7 @@ browser session or the local web server.
 
 Auth access/refresh tokens stay in server memory. The browser gets only a random,
 HttpOnly, SameSite=Strict session cookie. No client JavaScript, localStorage,
-token-bearing URLs or machine credentials are used. The web server uses only a
+access/refresh-token URLs or machine credentials are used. The web server uses only a
 publishable key and the signed-in user's token. The private read gateway enforces
 the approved UUID and active Auth session on every read.
 
@@ -31,6 +31,7 @@ GOD_MODE_OPERATOR_EMAIL=<approved operator email>
 GOD_MODE_OPERATOR_USER_ID=<actual approved Auth UUID>
 SUPABASE_PUBLISHABLE_KEY=<project publishable key>
 GOD_MODE_LOGIN_EMAIL_ENABLED=false
+GOD_MODE_MICROSOFT_LOGIN_ENABLED=false
 ```
 
 Run from the repository root with Deno 2.5.2:
@@ -58,11 +59,60 @@ Read-only dashboard inspection showed custom SMTP disabled and template editing
 unavailable until custom SMTP is connected. Supabase's default sender is limited
 to project-team email addresses and is not a production mail service. No SMTP
 credentials were accessed, settings changed or email sent during inspection.
-The operator has been asked whether an existing business domain/sending service
-is available. This is separate from the already-resolved operator email selection.
+The operator has no business domain or sending service. That question and the
+operator email selection are resolved. A Microsoft sign-in alternative is now
+implemented locally; it is not configured or verified against hosted Auth.
 
 References: [passwordless email](https://supabase.com/docs/guides/auth/auth-email-passwordless),
 [SMTP setup and default-sender restrictions](https://supabase.com/docs/guides/auth/auth-smtp).
+
+## Microsoft alternative — READY locally, disabled by default
+
+Microsoft sign-in avoids our sending a login email. It does not require the
+operator to buy a domain, but does require an authorized Microsoft Entra app
+registration, suitable tenant access and Supabase Azure-provider configuration.
+None has been created, changed or proved available by this release. Do not assume
+that an existing personal Microsoft account supplies an eligible Entra tenant.
+
+Before enabling this path, configure the app's supported personal-account type,
+Supabase's documented `consumers` tenant URL where appropriate, and the app's
+exact HTTPS Supabase Auth callback. Keep the client secret only in the provider's
+server configuration. Follow the documented verified-email claim setup, including
+`email` and `xms_edov`; request the `email` scope. Configure Supabase's frontend
+redirect allowlist narrowly for the reviewed local `/oauth/callback?flow=...`
+route, and test the exact match behavior. No arbitrary callback is accepted here.
+
+The current entrypoint still requires an actual approved Auth UUID. Initial
+identity enrollment and ownership verification must happen before authorizing
+that UUID on either service; this release supplies no enrollment bypass and does
+not auto-confirm an email. A successful provider callback alone cannot grant
+access: the private gateway must independently approve the user and active session.
+
+Each same-origin sign-in POST creates its own server-memory PKCE verifier and a
+five-minute opaque HttpOnly SameSite=Lax flow cookie. Only this temporary cookie
+uses Lax for the cross-site callback. The callback must match that browser flow;
+duplicates, expiry, wrong UUID, logout during exchange and failed gateway reads
+deny access. The resulting workspace cookie stays HttpOnly SameSite=Strict.
+
+The UI uses an explicit link to the fixed Supabase authorize URL, then a clean
+same-origin landing page with an `Open dashboard and CRM` link after callback.
+This avoids redirect/CSP and Strict-cookie ambiguity. A short-lived authorization
+code and opaque flow identifier necessarily arrive in the callback query; they
+are never echoed into HTML and are redirected to a clean URL. Never enable access
+logging of callback queries. Access/refresh tokens and the PKCE verifier stay on
+the server. Microsoft provider tokens are not returned to the application session.
+Pending verifiers are cleared on completion, cancellation or the next request
+after expiry. No browser storage or client JavaScript is involved.
+
+Eleven local tests exercise flow isolation, replay, cancellation, malformed inputs,
+authorization and the actual pinned SDK's PKCE exchange using a fake HTTP
+transport, including confirmed-user lookup failures. These are not Microsoft
+consent, hosted Auth or real-browser evidence.
+Complete real sign-in, refresh, logout, revocation and unapproved-user checks
+before deployment. Both login enable flags remain false by default.
+
+References: [Supabase Microsoft setup](https://supabase.com/docs/guides/auth/social-login/auth-azure),
+[PKCE flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow).
 
 ## Verification and limitations
 

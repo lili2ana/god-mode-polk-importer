@@ -28,8 +28,11 @@ not `getSession` or unchecked client claims; see the
 1. The operator email has been selected and recorded privately; do not put it in
    source code or assume mailbox ownership from that selection. Bind the approved account
    to its actual Auth UUID; do not authorize an email or user-editable metadata.
-2. Verify the implemented local login/refresh/logout routes with actual Auth and
-   configure the email sender/template before enabling code delivery.
+2. Verify the implemented local login/refresh/logout routes with actual Auth.
+   For email codes, configure the sender/template before enabling delivery.
+   The alternative Microsoft PKCE flow is implemented and tested locally but
+   disabled by default; Entra/provider configuration and verified identity
+   enrollment remain unproved. See the web README for its exact setup gates.
    No CORS is configured here: use a same-origin server integration, or separately
    implement and test an explicit origin policy. Do not put machine credentials
    into browser code to work around this boundary.
@@ -69,7 +72,9 @@ handler; without it the handler fails closed. Rollback disables the new operator
 route or clears its allowlist, rather than restoring a session-blind reader.
 Do not change the five existing private service endpoints or daily jobs.
 
-Local validation: all 58 Deno handler tests passed, including 16 operator cases.
+Local validation: all 82 Deno tests passed, including 16 operator, 13 web-session
+and 11 Microsoft-flow cases. The actual SDK runs with a fake HTTP transport;
+the full runtime dependency graph is locked and CI tests enforce the frozen lock.
 Four new disposable PostgreSQL tests cover service-only execution, cross-user
 sessions, removal, expiry and user-state checks. They require CI's PostgreSQL 17
 fixture; fixture success does not prove hosted login/logout or browser behavior.

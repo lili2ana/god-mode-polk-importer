@@ -11,8 +11,16 @@ export function limit(req: Request) {
   if (!/^[1-5]$/.test(raw)) throw new Error("Invalid batch size");
   return Number(raw);
 }
-export async function gis(url: string, fetcher: typeof fetch) {
-  const r = await fetcher(url, { signal: AbortSignal.timeout(10000) });
+export async function gis(
+  url: string,
+  fetcher: typeof fetch,
+  deadline = Date.now() + 10000,
+) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("GIS budget exhausted");
+  const r = await fetcher(url, {
+    signal: AbortSignal.timeout(Math.min(10000, remaining)),
+  });
   if (!r.ok) throw new Error("GIS HTTP failure");
   const data = await r.json();
   if (!data || data.error || data.exceededTransferLimit) {

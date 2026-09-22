@@ -35,6 +35,7 @@ class InternalAuthPostgresTests(unittest.TestCase):
             c.execute("INSERT INTO cron.job VALUES(4,'god_mode_dd_worker_daily','postgres','old',true,'5 6 * * *'),(5,'god_mode_dd_finalize_daily','postgres','old',true,'15 6 * * *')")
             c.execute('''CREATE FUNCTION cron.alter_job(job_id bigint,schedule text DEFAULT NULL,command text DEFAULT NULL,database text DEFAULT NULL,username text DEFAULT NULL,active boolean DEFAULT NULL) RETURNS void LANGUAGE sql AS $$ UPDATE cron.job j SET command=coalesce($3,j.command),active=coalesce($6,j.active) WHERE j.jobid=$1 $$''')
             c.execute("""CREATE FUNCTION extensions.http(request extensions.http_request) RETURNS extensions.http_response LANGUAGE plpgsql AS $$ BEGIN INSERT INTO net.requests(url,method,headers) VALUES(request.uri,request.method::text,jsonb_build_object('x-god-mode-token',(request.headers[1]).value)); RETURN (200,'application/json',NULL,'{"ok":true,"errors":0,"processed":1}')::extensions.http_response; END $$""")
+            c.execute("CREATE OR REPLACE FUNCTION extensions.http_set_curlopt(varchar,varchar) RETURNS boolean LANGUAGE sql AS $$ SELECT true $$; CREATE OR REPLACE FUNCTION extensions.http_list_curlopt() RETURNS TABLE(curlopt text,value text) LANGUAGE sql AS $$ SELECT 'CURLOPT_TIMEOUT_MS'::text,'5000'::text $$")
             c.execute(MIGRATION.read_text())
             c.execute(MIGRATION.with_name('20260922054152_private_internal_transport.sql').read_text())
             c.execute(MIGRATION.with_name('20260922054310_synchronous_private_workers.sql').read_text())

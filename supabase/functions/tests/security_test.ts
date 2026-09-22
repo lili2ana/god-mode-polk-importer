@@ -349,3 +349,18 @@ Deno.test("CRM: authorized response keeps existing contract and does not send ou
   eq(f.queries, ["crm_contact_queue"]);
   eq(f.patches, []);
 });
+
+Deno.test("exhausted GIS deadline makes no external request", async () => {
+  let calls = 0;
+  let failed = false;
+  try {
+    await gis("https://example.invalid/query", async () => {
+      calls++;
+      return Response.json({ features: [] });
+    }, Date.now() - 1);
+  } catch {
+    failed = true;
+  }
+  eq(calls, 0);
+  eq(failed, true);
+});

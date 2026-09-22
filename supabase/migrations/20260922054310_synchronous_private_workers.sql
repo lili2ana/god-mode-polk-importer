@@ -8,9 +8,8 @@ REVOKE ALL ON SEQUENCE god_mode_ops.internal_function_request_seq FROM PUBLIC,an
 
 CREATE OR REPLACE FUNCTION god_mode_ops.invoke_internal_worker(p_scope text,p_auth_check boolean DEFAULT false,p_limit integer DEFAULT 5)
 RETURNS bigint LANGUAGE plpgsql SECURITY INVOKER SET search_path=''
-SET http.curlopt_timeout_ms='45000' SET http.curlopt_connecttimeout_ms='5000'
 AS $invoke$
-DECLARE token text; request_id bigint; endpoint text; reply extensions.http_response; body jsonb; safe_result jsonb;
+DECLARE token text; request_id bigint; endpoint text; reply extensions.http_response; body jsonb; safe_result jsonb; old_timeout text;
 BEGIN
  IF p_scope IS NULL OR p_scope NOT IN ('god-mode-dd-worker','god-mode-dd-finalize','god-mode-crm-feed')
  OR p_auth_check IS NULL OR p_limit IS NULL OR p_limit NOT BETWEEN 1 AND 5 THEN
@@ -25,6 +24,8 @@ BEGIN
  endpoint := 'https://bnsmnztxkqmphvbikaxh.supabase.co/functions/v1/' || p_scope ||
    CASE WHEN p_auth_check THEN '?check=auth' ELSE '?limit=' || p_limit::text END;
  request_id := nextval('god_mode_ops.internal_function_request_seq'::regclass);
+ SELECT value INTO old_timeout FROM extensions.http_list_curlopt() WHERE curlopt='CURLOPT_TIMEOUT_MS';
+ PERFORM extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS','45000');
  BEGIN
    SELECT * INTO reply FROM extensions.http((
      (CASE WHEN p_scope='god-mode-crm-feed' THEN 'GET' ELSE 'POST' END)::extensions.http_method,
@@ -39,6 +40,7 @@ BEGIN
  EXCEPTION WHEN OTHERS THEN
    safe_result := '{"ok":false,"error":"transport_or_response_failure","execution_may_have_started":true}'::jsonb;
  END;
+ PERFORM extensions.http_set_curlopt('CURLOPT_TIMEOUT_MS',coalesce(old_timeout,'5000'));
  INSERT INTO god_mode_ops.internal_function_requests(request_id,scope,auth_check,queued_at,response_status,result)
    VALUES(request_id,p_scope,p_auth_check,now(),reply.status,safe_result);
  RETURN request_id;

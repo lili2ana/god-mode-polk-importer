@@ -8,64 +8,68 @@ import {
   requireParcel,
 } from "../_shared/evidence.ts";
 export function buildHandler(deps: Dependencies) {
-  const J = (url: string) => gis(url, deps.fetch ?? fetch);
-  const PA =
-    "https://gis.polk-county.net/server/rest/services/Map_Property_Appraiser/FeatureServer/1/query";
-  const DEV =
-    "https://gis.polk-county.net/server/rest/services/Map_Development_Overlays/MapServer";
-  const STREETS =
-    "https://gis.polk-county.net/server/rest/services/Map_Street_and_Addresses/MapServer";
-  const UTIL =
-    "https://gis.polk-county.net/server/rest/services/Map_Utilities_Service_Area/MapServer";
-  const FEMA =
-    "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query";
-  const NWI =
-    "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer";
-  const SWF =
-    "https://www25.swfwmd.state.fl.us/arcgis12/rest/services/BaseVector/parcel_search/MapServer/14/query";
-
-  function q(base: string, params: Record<string, string | number | boolean>) {
-    const u = new URL(base);
-    for (const [k, v] of Object.entries(params)) {
-      u.searchParams.set(k, String(v));
-    }
-    return u.toString();
-  }
-  function norm(s: any) {
-    return String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  }
-  function median(a: number[]) {
-    if (!a.length) return null;
-    const s = [...a].sort((x, y) => x - y);
-    const m = Math.floor(s.length / 2);
-    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-  }
-  async function layerByName(base: string, re: RegExp) {
-    const m = await J(base + "?f=json");
-    return (m.layers ?? []).find((x: any) => re.test(String(x.name ?? "")))
-      ?.id ?? null;
-  }
-  async function pointHit(
-    base: string,
-    layer: number,
-    x: number,
-    y: number,
-    outFields = "*",
-  ) {
-    return await J(
-      q(`${base}/${layer}/query`, {
-        geometry: `${x},${y}`,
-        geometryType: "esriGeometryPoint",
-        inSR: 4326,
-        spatialRel: "esriSpatialRelIntersects",
-        outFields,
-        returnGeometry: false,
-        f: "json",
-      }),
-    );
-  }
-
   return protect("god-mode-dd-worker", "POST", async (req, sb) => {
+    const deadline = Date.now() + 25000;
+    const J = (url: string) => gis(url, deps.fetch ?? fetch, deadline);
+    const PA =
+      "https://gis.polk-county.net/server/rest/services/Map_Property_Appraiser/FeatureServer/1/query";
+    const DEV =
+      "https://gis.polk-county.net/server/rest/services/Map_Development_Overlays/MapServer";
+    const STREETS =
+      "https://gis.polk-county.net/server/rest/services/Map_Street_and_Addresses/MapServer";
+    const UTIL =
+      "https://gis.polk-county.net/server/rest/services/Map_Utilities_Service_Area/MapServer";
+    const FEMA =
+      "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query";
+    const NWI =
+      "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer";
+    const SWF =
+      "https://www25.swfwmd.state.fl.us/arcgis12/rest/services/BaseVector/parcel_search/MapServer/14/query";
+
+    function q(
+      base: string,
+      params: Record<string, string | number | boolean>,
+    ) {
+      const u = new URL(base);
+      for (const [k, v] of Object.entries(params)) {
+        u.searchParams.set(k, String(v));
+      }
+      return u.toString();
+    }
+    function norm(s: any) {
+      return String(s ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    }
+    function median(a: number[]) {
+      if (!a.length) return null;
+      const s = [...a].sort((x, y) => x - y);
+      const m = Math.floor(s.length / 2);
+      return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+    }
+    async function layerByName(base: string, re: RegExp) {
+      const m = await J(base + "?f=json");
+      return (m.layers ?? []).find((x: any) => re.test(String(x.name ?? "")))
+        ?.id ?? null;
+    }
+    async function pointHit(
+      base: string,
+      layer: number,
+      x: number,
+      y: number,
+      outFields = "*",
+    ) {
+      return await J(
+        q(`${base}/${layer}/query`, {
+          geometry: `${x},${y}`,
+          geometryType: "esriGeometryPoint",
+          inSR: 4326,
+          spatialRel: "esriSpatialRelIntersects",
+          outFields,
+          returnGeometry: false,
+          f: "json",
+        }),
+      );
+    }
+
     const { data: rows, error } = await sb.from("due_diligence_reviews").select(
       "*,properties(*)",
     ).in("status", [
@@ -92,6 +96,7 @@ export function buildHandler(deps: Dependencies) {
     } catch (_) {}
     const results: any[] = [];
     for (const d of rows ?? []) {
+      if (Date.now() >= deadline) break;
       const p: any = (d as any).properties;
       const parcel = String(p?.parcel_id ?? "");
       const started = new Date().toISOString();
@@ -399,7 +404,7 @@ export function buildHandler(deps: Dependencies) {
     }
     return new Response(
       JSON.stringify({
-        ok: true,
+        ok: !results.some((r: any) => r.status === "error"),
         processed: results.filter((r: any) => r.status !== "error").length,
         errors: results.filter((r: any) => r.status === "error").length,
         results,

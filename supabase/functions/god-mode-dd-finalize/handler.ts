@@ -8,21 +8,22 @@ import {
   requireParcel,
 } from "../_shared/evidence.ts";
 export function buildHandler(deps: Dependencies) {
-  const J = (url: string) => gis(url, deps.fetch ?? fetch);
-  const PA =
-    "https://gis.polk-county.net/server/rest/services/Map_Property_Appraiser/FeatureServer/1/query";
-  const FLU =
-    "https://gis.polk-county.net/hosting/rest/services/PublicViewer/Map_Land_Use_and_Zoning/MapServer/9/query";
-  const ROAD =
-    "https://gis.polk-county.net/hosting/rest/services/PolkRoads/Polk_Roads_Map/MapServer/5/query";
-
-  function Q(base: string, p: Record<string, string | number | boolean>) {
-    const u = new URL(base);
-    for (const [k, v] of Object.entries(p)) u.searchParams.set(k, String(v));
-    return u.toString();
-  }
-
   return protect("god-mode-dd-finalize", "POST", async (req, sb) => {
+    const deadline = Date.now() + 25000;
+    const J = (url: string) => gis(url, deps.fetch ?? fetch, deadline);
+    const PA =
+      "https://gis.polk-county.net/server/rest/services/Map_Property_Appraiser/FeatureServer/1/query";
+    const FLU =
+      "https://gis.polk-county.net/hosting/rest/services/PublicViewer/Map_Land_Use_and_Zoning/MapServer/9/query";
+    const ROAD =
+      "https://gis.polk-county.net/hosting/rest/services/PolkRoads/Polk_Roads_Map/MapServer/5/query";
+
+    function Q(base: string, p: Record<string, string | number | boolean>) {
+      const u = new URL(base);
+      for (const [k, v] of Object.entries(p)) u.searchParams.set(k, String(v));
+      return u.toString();
+    }
+
     const { data: rows, error } = await sb.from("due_diligence_reviews").select(
       "*,properties(*)",
     ).in("status", [
@@ -38,6 +39,7 @@ export function buildHandler(deps: Dependencies) {
     }
     const out: any[] = [];
     for (const d of rows ?? []) {
+      if (Date.now() >= deadline) break;
       const p: any = (d as any).properties;
       const parcel = String(p.parcel_id ?? "");
       const now = new Date().toISOString();
@@ -176,7 +178,7 @@ export function buildHandler(deps: Dependencies) {
     }
     return new Response(
       JSON.stringify({
-        ok: true,
+        ok: !out.some((r: any) => r.error),
         processed: out.filter((x: any) => !x.error).length,
         errors: out.filter((x: any) => x.error).length,
         results: out,

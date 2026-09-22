@@ -77,8 +77,41 @@ verify old GIS findings or existing property values.
 - A prior worker probe (1000003) surfaced a source-processing failure. Optional
   source isolation was fixed and regression-tested before the successful repeat.
 - Deployed versions: CRM **3**, DD worker **6**, finalizer **4**.
-- The first nightly runs using this authentication path remain pending at release
-  time. Direct production runs do not substitute for observing scheduled execution.
+- The first secured DD worker cron succeeded at **06:05:00-06:05:23 UTC** on
+  September 22. Request **1000006** returned HTTP 200, `ok=true`, five processed
+  properties and zero errors. The 06:15 finalizer is still pending at this update.
+
+## Title/access follow-up
+
+Read-only source inspection found the deployed title/access worker had no handler
+authentication and gateway verification disabled. It could update review findings
+without authorization. No cron or database function caller was found; the latest
+recorded invocation was September 4. No anonymous write probe was performed.
+
+The follow-up handler uses the shared private authentication gate and an independent
+Vault credential. It accepts POST only, caps work at five reviews, and times out
+source reachability probes after eight seconds. It preserves underwriting and legal
+statuses, excludes non-review records, and compares `updated_at` before replacing
+findings so a concurrent edit becomes a reported conflict. Stored road signals are
+not promoted to verified road proximity. Endpoint reachability never clears title.
+Write/conflict/audit failures return `ok=false`; no contact information is returned.
+
+The migration extends the fixed private dispatcher without changing daily schedules
+or rotating the existing CRM/DD credentials. Title/access remains manually invoked.
+This follow-up is LIVE: title/access version **5** was deployed, and all three
+retrieved source files matched the repository. Anonymous, forged-scope and public-key
+probes returned **401**. Dedicated scoped health request **1000007** returned 200;
+real one-review request **1000008** returned 200, `ok=true`, processed one and
+reported zero errors. Before/after fingerprints confirmed every status and all
+unrelated findings were preserved. Title clearance, verified road proximity and
+legal access remained false. The original v4 source is retained privately.
+
+CI run **35693537763** passed all **66 Python/PostgreSQL 17** and **34 Deno** tests
+at implementation head `4195ba5fc23ee691b81986f2dd705580dc7f053e` (100 tests).
+The four credential hashes are distinct; ordinary roles still cannot invoke the
+dispatcher or authentication RPC. No title/access schedule was installed.
+Rollback means deploying a corrected authenticated handler or disabling its scoped
+credential; never redeploy the unauthenticated original.
 
 Tests cover actual handler behavior, credential isolation, denied requests without
 business queries, safe health checks, unknown-vs-zero evidence, GIS failures,
@@ -92,7 +125,9 @@ policies (default deny), as described by the [Supabase advisor](https://supabase
 The authenticated backend is working; verified comps, full cost underwriting,
 title/access review and a private user-facing profile integration remain unfinished.
 Seller outreach and countywide cleanup remain off. Other deployed functions are
-outside this three-endpoint release and require their own access audit.
+outside these reviewed endpoints and require their own access audit, including the
+aggregate dashboard. Private browser login and dashboard read integration remain
+separate unfinished work.
 
 For a regression, disable the affected cron job and scoped credential, preserve the
 private request log, and deploy a corrected authenticated handler. Never restore

@@ -1,8 +1,163 @@
 import { buildHandler as worker } from "../god-mode-dd-worker/handler.ts";
 import { buildHandler as finalize } from "../god-mode-dd-finalize/handler.ts";
+import { buildHandler as titleAccess } from "../god-mode-title-access-worker/handler.ts";
 import { buildHandler as crm } from "../god-mode-crm-feed/handler.ts";
 import { amount, gis } from "../_shared/evidence.ts";
 import { sha256 } from "../_shared/auth.ts";
+
+function titleFixture(
+  options: {
+    conflict?: boolean;
+    writeFail?: boolean;
+    auditFail?: boolean;
+    sourceFail?: boolean;
+  } = {},
+) {
+  const patches: any[] = [], predicates: any[] = [], tables: string[] = [];
+  let selectedLimit: number | undefined;
+  let fetchCalls = 0;
+  const original = {
+    underwriting: {
+      automated_acquisition_eligible: false,
+      preliminary_mao: null,
+    },
+  };
+  const sb = {
+    from: (table: string) => {
+      tables.push(table);
+      let updating = false, inserting = false;
+      const chain: any = {
+        select: () => chain,
+        order: () => chain,
+        eq: (k: string, v: unknown) => {
+          predicates.push([k, v]);
+          return chain;
+        },
+        is: (k: string, v: unknown) => {
+          predicates.push([k, v]);
+          return chain;
+        },
+        limit: (n: number) => {
+          selectedLimit = n;
+          return chain;
+        },
+        update: (p: any) => {
+          updating = true;
+          patches.push(p);
+          return chain;
+        },
+        insert: () => {
+          inserting = true;
+          return chain;
+        },
+        then: (resolve: any) =>
+          resolve({
+            data: updating
+              ? options.conflict ? [] : [{ id: "review" }]
+              : inserting
+              ? null
+              : [{
+                id: "review",
+                updated_at: "2026-01-01T00:00:00Z",
+                findings: original,
+                properties: { road_access_signal: null },
+              }],
+            error:
+              updating && options.writeFail || inserting && options.auditFail
+                ? { message: "private database detail" }
+                : null,
+          }),
+      };
+      return chain;
+    },
+  };
+  return {
+    patches,
+    predicates,
+    tables,
+    original,
+    get limit() {
+      return selectedLimit;
+    },
+    get fetchCalls() {
+      return fetchCalls;
+    },
+    handler: titleAccess({
+      env,
+      createClient: () => sb,
+      fetch: async (_url, init) => {
+        fetchCalls++;
+        eq(!!init?.signal, true);
+        if (options.sourceFail) throw Error("private network details");
+        return new Response(null, { status: 200 });
+      },
+    }),
+  };
+}
+const titleRequest = (limit = "1") =>
+  new Request(`https://example.invalid?limit=${limit}`, {
+    method: "POST",
+    headers: { apikey: "sb_secret_test_backend_only" },
+  });
+Deno.test("title/access: preserves underwriting and legal statuses; null road is not verified", async () => {
+  const f = titleFixture();
+  const body = await (await f.handler(titleRequest())).json();
+  eq(body.ok, true);
+  eq(body.processed, 1);
+  eq(f.limit, 1);
+  eq(Object.keys(f.patches[0]).sort(), ["findings", "updated_at"]);
+  eq(f.patches[0].findings.underwriting, f.original.underwriting);
+  eq(f.patches[0].findings.access_records.stored_road_access_signal, null);
+  eq(
+    f.patches[0].findings.access_records.mapped_road_proximity_verified,
+    false,
+  );
+  eq(f.patches[0].findings.access_records.legal_access_verified, false);
+  eq(f.patches[0].findings.title_records.automated_clearance, false);
+  eq(
+    f.predicates.some(([k, v]) =>
+      k === "updated_at" && v === "2026-01-01T00:00:00Z"
+    ),
+    true,
+  );
+  eq(f.tables, [
+    "due_diligence_reviews",
+    "due_diligence_reviews",
+    "automation_runs",
+  ]);
+});
+for (const option of ["conflict", "writeFail", "auditFail"] as const) {
+  Deno.test(`title/access: ${option} is not reported as successful execution`, async () => {
+    const f = titleFixture({ [option]: true });
+    const r = await (await f.handler(titleRequest())).json();
+    eq(r.ok, false);
+    if (option !== "auditFail") {
+      eq(r.processed, 0);
+      eq(r.errors, 1);
+    } else eq(r.audit_error, true);
+    eq(JSON.stringify(r).includes("private database detail"), false);
+  });
+}
+Deno.test("title/access: source failure attaches unknown evidence without clearance", async () => {
+  const f = titleFixture({ sourceFail: true });
+  const body = await (await f.handler(titleRequest())).json();
+  eq(body.processed, 1);
+  eq(body.title_clearance_automated, false);
+  eq(
+    f.patches[0].findings.title_records.source_health.official_records
+      .source_error,
+    true,
+  );
+  eq(JSON.stringify(body).includes("private network details"), false);
+});
+Deno.test("title/access: invalid and oversized limits produce no queries or probes", async () => {
+  const f = titleFixture();
+  for (const limit of ["0", "6", "50", "1.5", "NaN", "-1"]) {
+    eq((await f.handler(titleRequest(limit))).status, 400);
+  }
+  eq(f.tables, []);
+  eq(f.fetchCalls, 0);
+});
 function eq(a: unknown, b: unknown) {
   if (JSON.stringify(a) !== JSON.stringify(b)) {
     throw new Error(`Expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
@@ -17,11 +172,16 @@ const env = (name: string) =>
     SUPABASE_SECRET_KEYS: JSON.stringify({ default: key }),
     SUPABASE_SERVICE_ROLE_KEY: "server-legacy-test",
   } as Record<string, string>)[name];
-const handlers = [["god-mode-dd-worker", worker, "POST"], [
-  "god-mode-dd-finalize",
-  finalize,
-  "POST",
-], ["god-mode-crm-feed", crm, "GET"]] as const;
+const handlers = [
+  ["god-mode-dd-worker", worker, "POST"],
+  [
+    "god-mode-dd-finalize",
+    finalize,
+    "POST",
+  ],
+  ["god-mode-crm-feed", crm, "GET"],
+  ["god-mode-title-access-worker", titleAccess, "POST"],
+] as const;
 for (const [scope, build, method] of handlers) {
   Deno.test(`${scope}: unauthenticated/public/forged requests cannot access database`, async () => {
     let calls = 0;

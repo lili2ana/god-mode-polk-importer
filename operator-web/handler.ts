@@ -19,6 +19,7 @@ export type WebDependencies = {
     exchange: (code: string) => Promise<Tokens & { userId: string }>;
     dispose: () => void;
   }>;
+  github?: WebDependencies["microsoft"];
   now?: () => number;
 };
 const escape = (v: unknown) =>
@@ -51,6 +52,13 @@ export function buildWeb(deps: WebDependencies) {
   if (!/^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(deps.operatorId)) {
     throw Error("Approved operator UUID required");
   }
+  if (deps.github && deps.microsoft) {
+    throw Error("Configure only one login provider");
+  }
+  const oauth = deps.github ?? deps.microsoft;
+  const provider = deps.github ? "github" : "azure";
+  const providerLabel = deps.github ? "GitHub" : "Microsoft";
+  const expectedScope = deps.github ? "user:email" : "email";
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
   type Flow =
@@ -71,8 +79,8 @@ export function buildWeb(deps: WebDependencies) {
     `${flowCookieName}=${id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${
       origin.protocol === "https:" ? "; Secure" : ""
     }`;
-  const login = deps.microsoft
-    ? `<h1>Your private deal workspace</h1><section><h2>Sign in</h2><p>Use your approved Microsoft account to open your dashboard and CRM.</p><form method="post" action="/oauth/start"><button>Continue with Microsoft</button></form></section>`
+  const login = oauth
+    ? `<h1>Your private deal workspace</h1><section><h2>Sign in</h2><p>Use your approved ${providerLabel} account to open your dashboard and CRM.</p><form method="post" action="/oauth/start"><button>Continue with ${providerLabel}</button></form></section>`
     : emailLogin;
   const page = (
     body: string,
@@ -194,8 +202,11 @@ export function buildWeb(deps: WebDependencies) {
       const flowId = readCookie(req, flowCookieName);
       const session = sessions.get(id);
       if (req.method === "POST" && url.pathname === "/oauth/start") {
-        if (!deps.microsoft) {
-          return page("<h1>Microsoft sign-in is not configured.</h1>", 503);
+        if (!oauth) {
+          return page(
+            `<h1>${providerLabel} sign-in is not configured.</h1>`,
+            503,
+          );
         }
         if (now() - lastOAuth < 10000 || flows.size >= 10) {
           return page("<h1>Please wait before trying again.</h1>", 429);
@@ -204,14 +215,14 @@ export function buildWeb(deps: WebDependencies) {
         removeFlow(flowId);
         const fresh = crypto.randomUUID() + crypto.randomUUID();
         const callback = `${deps.origin}/oauth/callback?flow=${fresh}`;
-        const started = await deps.microsoft(callback);
+        const started = await oauth(callback);
         let authorize: URL;
         try {
           authorize = new URL(started.url);
         } catch {
           started.dispose();
           return page(
-            "<h1>Microsoft sign-in is not configured safely.</h1>",
+            `<h1>${providerLabel} sign-in is not configured safely.</h1>`,
             503,
           );
         }
@@ -219,19 +230,35 @@ export function buildWeb(deps: WebDependencies) {
           authorize.origin !== "https://bnsmnztxkqmphvbikaxh.supabase.co" ||
           authorize.pathname !== "/auth/v1/authorize" || authorize.username ||
           authorize.password || authorize.hash ||
-          authorize.searchParams.get("provider") !== "azure" ||
+          authorize.searchParams.get("provider") !== provider ||
+          authorize.searchParams.get("scopes") !== expectedScope ||
+          [...authorize.searchParams.keys()].some((key) =>
+            ![
+              "provider",
+              "redirect_to",
+              "scopes",
+              "code_challenge",
+              "code_challenge_method",
+            ].includes(key)
+          ) ||
           authorize.searchParams.get("redirect_to") !== callback ||
           authorize.searchParams.get("code_challenge_method")?.toLowerCase() !==
             "s256" ||
           !/^[A-Za-z0-9_-]{43}$/.test(
             authorize.searchParams.get("code_challenge") ?? "",
           ) ||
-          ["provider", "redirect_to", "code_challenge", "code_challenge_method"]
+          [
+            "provider",
+            "redirect_to",
+            "scopes",
+            "code_challenge",
+            "code_challenge_method",
+          ]
             .some((k) => authorize.searchParams.getAll(k).length !== 1)
         ) {
           started.dispose();
           return page(
-            "<h1>Microsoft sign-in is not configured safely.</h1>",
+            `<h1>${providerLabel} sign-in is not configured safely.</h1>`,
             503,
           );
         }
@@ -242,9 +269,9 @@ export function buildWeb(deps: WebDependencies) {
         });
         // An explicit navigation avoids cross-origin POST redirect/CSP ambiguity.
         return page(
-          `<h1>Microsoft sign-in</h1><p><a href="${
+          `<h1>${providerLabel} sign-in</h1><p><a href="${
             escape(authorize.href)
-          }">Sign in with Microsoft</a></p>`,
+          }">Sign in with ${providerLabel}</a></p>`,
           200,
           {
             "set-cookie": flowCookie(fresh, 300),
@@ -260,7 +287,7 @@ export function buildWeb(deps: WebDependencies) {
         const flow = flows.get(flowId);
         const params = url.searchParams;
         if (
-          !deps.microsoft || !flow || flow.processing ||
+          !oauth || !flow || flow.processing ||
           params.getAll("flow").length !== 1 ||
           params.get("flow") !== flowId
         ) return failed();

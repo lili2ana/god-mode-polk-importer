@@ -32,6 +32,7 @@ GOD_MODE_OPERATOR_USER_ID=<actual approved Auth UUID>
 SUPABASE_PUBLISHABLE_KEY=<project publishable key>
 GOD_MODE_LOGIN_EMAIL_ENABLED=false
 GOD_MODE_MICROSOFT_LOGIN_ENABLED=false
+GOD_MODE_GITHUB_LOGIN_ENABLED=false
 ```
 
 Run from the repository root with Deno 2.5.2:
@@ -44,7 +45,9 @@ The only action that requests email is a same-origin form POST to `/request-code
 while the email-enabled setting is true. Requests target the configured email;
 there is no arbitrary-recipient input and no automatic signup. `/verify-code`
 must return the approved UUID and successfully call the deployed operator gateway
-before an application session is issued. No accounts are created by this server.
+before an application session is issued. The email flow does not auto-create
+accounts. Social OAuth may enroll an Auth user after provider consent; that alone
+never authorizes private dashboard access.
 
 Before enabling email, provision the intended unconfirmed Auth account without
 auto-confirming mailbox ownership, configure the actual UUID on both services,
@@ -67,6 +70,10 @@ References: [passwordless email](https://supabase.com/docs/guides/auth/auth-emai
 [SMTP setup and default-sender restrictions](https://supabase.com/docs/guides/auth/auth-smtp).
 
 ## Microsoft alternative — READY locally, disabled by default
+
+This path is currently blocked for the intended operator by a Microsoft tenant
+access error. Do not keep retrying browsers or use a school directory. GitHub is
+the selected setup route; Microsoft remains disabled.
 
 Microsoft sign-in avoids our sending a login email. It does not require the
 operator to buy a domain, but does require an authorized Microsoft Entra app
@@ -113,6 +120,51 @@ before deployment. Both login enable flags remain false by default.
 
 References: [Supabase Microsoft setup](https://supabase.com/docs/guides/auth/social-login/auth-azure),
 [PKCE flow](https://supabase.com/docs/guides/auth/sessions/pkce-flow).
+
+## GitHub sign-in — READY locally, setup pending
+
+The same isolated PKCE and session boundary supports `github` through `oauth.ts`.
+Set only `GOD_MODE_GITHUB_LOGIN_ENABLED=true` after the release gates pass; keep
+Microsoft and email off. Simultaneously configured Microsoft/GitHub handlers are
+rejected at startup. No caller can choose the provider or add permissions. The
+fixed authorize URL must contain exactly the selected provider, callback, scope
+and S256 challenge fields. GitHub requests `user:email`, never `repo` or admin
+scopes. Supabase checks the provider identity; the gateway then checks the exact
+approved Auth UUID and live session. A connected repository account is not itself
+evidence of a completed browser login.
+
+Prepare one OAuth application in the verified operator's own GitHub account:
+
+- Application name: `God Mode Private Workspace`.
+- Homepage URL: `https://github.com/lili2ana/god-mode-polk-importer` (the project
+  homepage; no business domain or public dashboard is required for this setup).
+- Description: `Private property-research workspace. Identity sign-in only.`
+- Callback: `https://bnsmnztxkqmphvbikaxh.supabase.co/auth/v1/callback`.
+- Device flow: off. Do not change provider token expiry defaults without checking
+  actual hosted compatibility; the web application does not use provider tokens.
+
+Keep the client secret in Supabase's GitHub provider configuration only, never
+in repository files, the web server, URLs, chat or browser application code.
+Inspect the actual registration/consent screen before granting access. The
+operator must complete any required login/verification directly on GitHub.
+Configure the narrow frontend callback allowlist separately from GitHub's
+Supabase callback. Preserve existing project settings and unrelated providers.
+
+Initial enrollment is still a release gate: reconcile the provider-verified
+GitHub identity and confirmed Auth account, then authorize that exact UUID.
+Do not authorize by GitHub display name, editable metadata, the connector's
+account alone or an unverified email. The current server requires the actual
+approved UUID; it has no automatic first-user-admin or enrollment bypass.
+
+Twenty-four OAuth tests run the same browser-binding, replay, cancellation,
+confirmed-user, redirect/scope and actual-SDK fake-transport checks across both
+providers. All 95 Deno tests and frozen-lock server typecheck passed locally.
+Real GitHub consent, hosted Auth enrollment, login/refresh/logout/revocation and
+unapproved-user probes remain unverified. No OAuth app, client secret, account,
+allowlist or production provider has been created by this preparation.
+
+References: [GitHub OAuth app registration](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app),
+[Supabase GitHub setup](https://supabase.com/docs/guides/auth/social-login/auth-github).
 
 ## Verification and limitations
 

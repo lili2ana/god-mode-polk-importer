@@ -11,6 +11,13 @@ export function buildHandler(deps: Dependencies) {
   return protect("god-mode-dd-worker", "POST", async (req, sb) => {
     const deadline = Date.now() + 25000;
     const J = (url: string) => gis(url, deps.fetch ?? fetch, deadline);
+    const optionalGIS = async (url: string) => {
+      try {
+        return await J(url);
+      } catch {
+        return null;
+      }
+    };
     const PA =
       "https://gis.polk-county.net/server/rest/services/Map_Property_Appraiser/FeatureServer/1/query";
     const DEV =
@@ -46,8 +53,8 @@ export function buildHandler(deps: Dependencies) {
       return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
     }
     async function layerByName(base: string, re: RegExp) {
-      const m = await J(base + "?f=json");
-      return (m.layers ?? []).find((x: any) => re.test(String(x.name ?? "")))
+      const m = await optionalGIS(base + "?f=json");
+      return (m?.layers ?? []).find((x: any) => re.test(String(x.name ?? "")))
         ?.id ?? null;
     }
     async function pointHit(
@@ -57,7 +64,7 @@ export function buildHandler(deps: Dependencies) {
       y: number,
       outFields = "*",
     ) {
-      return await J(
+      return await optionalGIS(
         q(`${base}/${layer}/query`, {
           geometry: `${x},${y}`,
           geometryType: "esriGeometryPoint",
@@ -157,7 +164,7 @@ export function buildHandler(deps: Dependencies) {
         };
 
         if (true) {
-          const z = await J(q(FEMA, {
+          const z = await optionalGIS(q(FEMA, {
             geometry: `${x},${y}`,
             geometryType: "esriGeometryPoint",
             inSR: 4326,
@@ -166,11 +173,12 @@ export function buildHandler(deps: Dependencies) {
             returnGeometry: false,
             f: "json",
           }));
-          const fa = z.features?.[0]?.attributes;
+          const fa = z?.features?.[0]?.attributes;
           patch.flood_status = fa ? "point_screen_only" : "review_required";
           findings.flood = {
             source: "FEMA NFHL",
             checked_at: started,
+            source_error: !z,
             zone: fa?.FLD_ZONE ?? null,
             subtype: fa?.ZONE_SUBTY ?? null,
             sfha: fa?.SFHA_TF ?? null,
@@ -214,13 +222,14 @@ export function buildHandler(deps: Dependencies) {
 
         if (zoningLayer != null) {
           const z = await pointHit(DEV, zoningLayer, x, y, "*");
-          const za = z.features?.[0]?.attributes ?? null;
+          const za = z?.features?.[0]?.attributes ?? null;
           patch.zoning_status = za ? "verified_gis" : "review_required";
           findings.zoning = {
             source: "Polk County GIS Development Overlays",
             checked_at: started,
             layer: zoningLayer,
             attributes: za,
+            source_error: !z,
           };
         } else {
           patch.zoning_status = "review_required";
@@ -233,7 +242,7 @@ export function buildHandler(deps: Dependencies) {
         }
 
         if (streetLayer != null) {
-          const s = await J(q(`${STREETS}/${streetLayer}/query`, {
+          const s = await optionalGIS(q(`${STREETS}/${streetLayer}/query`, {
             geometry: `${x},${y}`,
             geometryType: "esriGeometryPoint",
             inSR: 4326,
@@ -244,7 +253,7 @@ export function buildHandler(deps: Dependencies) {
             returnGeometry: false,
             f: "json",
           }));
-          const sa = s.features?.[0]?.attributes ?? null;
+          const sa = s?.features?.[0]?.attributes ?? null;
           patch.access_status = sa
             ? "verified_near_mapped_street"
             : "review_required";
@@ -253,6 +262,7 @@ export function buildHandler(deps: Dependencies) {
             checked_at: started,
             layer: streetLayer,
             nearby_street: sa,
+            source_error: !s,
             note:
               "Mapped-street proximity is not legal ingress/egress title verification.",
           };
@@ -276,7 +286,7 @@ export function buildHandler(deps: Dependencies) {
           scope: "point_screen_only",
         };
 
-        const comps = await J(q(SWF, {
+        const comps = await optionalGIS(q(SWF, {
           geometry: `${x},${y}`,
           geometryType: "esriGeometryPoint",
           inSR: 4326,
@@ -291,7 +301,9 @@ export function buildHandler(deps: Dependencies) {
         }));
         const subjAc = Number(p.acreage ?? 0),
           isLand = String(p.property_type ?? "").toLowerCase() === "land";
-        const sales = (comps.features ?? []).map((c: any) => c.attributes ?? {})
+        const sales = (comps?.features ?? []).map((c: any) =>
+          c.attributes ?? {}
+        )
           .filter((c: any) =>
             Number(c.SALE1_AMT) > 0 && String(c.PARNO ?? "") !== parcel
           ).slice(0, 30);
@@ -313,6 +325,7 @@ export function buildHandler(deps: Dependencies) {
           estimated_value: null,
           unqualified_candidate_median: est,
           qualification: "not_verified",
+          source_error: !comps,
           method: isLand
             ? "median nearby recorded sale price per acre x subject acreage"
             : "median nearby recorded sale amount",

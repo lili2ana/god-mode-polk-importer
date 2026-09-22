@@ -161,6 +161,7 @@ function fixture(
     failUtilities?: boolean;
     failPA?: boolean;
     failWrite?: boolean;
+    failOptional?: boolean;
   } = {},
 ) {
   const patches: any[] = [];
@@ -225,6 +226,7 @@ function fixture(
         },
       );
     }
+    if (options.failOptional) return Response.json({ error: { code: 503 } });
     if (url.includes("Wetlands")) {
       return Response.json(
         options.failWetlands ? { error: { code: 500 } } : { features: [] },
@@ -363,4 +365,22 @@ Deno.test("exhausted GIS deadline makes no external request", async () => {
   }
   eq(calls, 0);
   eq(failed, true);
+});
+
+Deno.test("worker: optional source outages persist unknown evidence without dropping the review", async () => {
+  const f = fixture({ failOptional: true });
+  const r = await worker(f.deps)(
+    new Request("https://example.invalid", {
+      method: "POST",
+      headers: { apikey: key },
+    }),
+  );
+  const body = await r.json();
+  eq(body.processed, 1);
+  eq(body.errors, 0);
+  const p = f.patches[0];
+  eq(p.findings.flood.source_error, true);
+  eq(p.findings.comps.source_error, true);
+  eq(p.utilities_status, "review_required");
+  eq(p.findings.underwriting.preliminary_mao, null);
 });

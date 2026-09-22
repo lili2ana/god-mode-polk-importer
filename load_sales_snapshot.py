@@ -126,22 +126,12 @@ def main():
     parser.add_argument('--workdir', type=Path, default=Path('.polk_import/sales'))
     parser.add_argument('--manifest-output', type=Path)
     args = parser.parse_args()
-    if args.load and (not args.accepted_sha256 or not args.capacity_reviewed):
-        parser.error('--load requires --accepted-sha256 and --capacity-reviewed')
+    if args.load:
+        parser.error('Countywide production loading is disabled; use the lean shadow pipeline')
     workdir = args.workdir / datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')
     workdir.mkdir(parents=True)
     manifest = {'production_verified':False,'status':'BLOCKED'}
     try:
-        dsn = None
-        if args.load:
-            import psycopg2
-            dsn = validate_target(os.environ['SUPABASE_DB_URL'])
-            dsn.setdefault('sslmode','require')
-            dsn['connect_timeout'] = 15
-            with closing(psycopg2.connect(**dsn)) as conn:
-                with conn.cursor() as cursor:
-                    require_writable(cursor)
-                conn.rollback()
         archive = args.zip or workdir / 'ftp_sales.zip'
         if not args.zip:
             manifest['source'] = download('sales', archive)
@@ -149,13 +139,7 @@ def main():
         if args.accepted_sha256 and manifest['sha256'] != args.accepted_sha256:
             raise ValueError('Source fingerprint differs from accepted manifest')
         manifest['status'] = 'READY'
-        if args.load:
-            manifest['status'] = 'BLOCKED'
-            with closing(psycopg2.connect(**dsn)) as conn, closing(sqlite3.connect(workdir/'source.sqlite')) as local:
-                load(conn, local, manifest, workdir)
-            manifest['status'] = 'LIVE'
-        else:
-            print(f'source_validated=true rows={manifest["rows"]} sha256={manifest["sha256"]}', flush=True)
+        print(f'source_validated=true rows={manifest["rows"]} sha256={manifest["sha256"]}', flush=True)
     except Exception as exc:
         manifest['error_type'] = type(exc).__name__
         manifest['sqlstate'] = getattr(exc,'pgcode',None)

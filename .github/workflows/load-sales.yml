@@ -1,89 +1,32 @@
-name: Load Polk Sales Feed
-
+name: Validate Polk Sales Archive
 on:
   workflow_dispatch:
     inputs:
-      action:
-        type: choice
-        options: [validate, load]
-        default: validate
-        description: Validate source only, or publish an accepted snapshot
-      accepted_sha256:
-        type: string
-        description: Required source SHA-256 from a completed validation run for load
       expected_rows:
         type: string
         default: '3031366'
         description: Row count of accepted source snapshot
-      capacity_reviewed:
-        type: boolean
-        default: false
-        description: Database recovery and storage/WAL capacity reviewed before load
-
-concurrency:
-  group: polk-sales-production-load
-  cancel-in-progress: false
-
+permissions:
+  contents: read
 jobs:
-  load:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    permissions:
-      contents: read
-    env:
-      SALES_PARTITIONS: "32"
-      PYTHONUNBUFFERED: "1"
-
+    timeout-minutes: 120
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
-      - name: Install dependency
-        run: pip install psycopg2-binary==2.9.11
-
-      - name: Require correct Supabase target
-        if: inputs.action == 'load'
+          python-version: '3.11'
+      - run: pip install psycopg2-binary==2.9.11
+      - name: Validate archive without database credentials
         env:
-          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${SUPABASE_DB_URL:-}" || { echo "SUPABASE_DB_URL secret is missing"; exit 2; }
-          case "$SUPABASE_DB_URL" in
-            *bnsmnztxkqmphvbikaxh*) ;;
-            *) echo "Refusing to run: unexpected Supabase project"; exit 3 ;;
-          esac
-
-      - name: Load and verify official Polk sales feed
-        shell: bash
-        env:
-          SUPABASE_DB_URL: ${{ inputs.action == 'load' && secrets.SUPABASE_DB_URL || '' }}
-          SALES_ACTION: ${{ inputs.action }}
-          ACCEPTED_SHA256: ${{ inputs.accepted_sha256 }}
           EXPECTED_ROWS: ${{ inputs.expected_rows }}
-          CAPACITY_REVIEWED: ${{ inputs.capacity_reviewed }}
-        run: |
-          set -euo pipefail
-          args=(--expected-rows "$EXPECTED_ROWS" --manifest-output sales_manifest.json)
-          if [ "$SALES_ACTION" = load ]; then
-            test "$CAPACITY_REVIEWED" = true
-            test -n "$ACCEPTED_SHA256"
-            args+=(--load --accepted-sha256 "$ACCEPTED_SHA256" --capacity-reviewed)
-          fi
-          python load_sales_snapshot.py "${args[@]}" | tee sales_load.log
-
-      - name: Upload verification evidence
+        run: python load_sales_snapshot.py --expected-rows "$EXPECTED_ROWS" --manifest-output sales_manifest.json
+      - name: Upload aggregate evidence only
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: polk-sales-load-${{ github.run_id }}
+          name: polk-sales-validation-${{ github.run_id }}
           retention-days: 30
           if-no-files-found: ignore
-          path: |
-            sales_load.log
-            sales_manifest.json
+          path: sales_manifest.json

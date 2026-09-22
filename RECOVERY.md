@@ -1,5 +1,11 @@
 # Sales recovery release
 
+**Superseded for production loading September 22, 2026.** The lean architecture
+keeps countywide archives outside PostgreSQL. Do not run the historical countywide
+`--load` command below. The GitHub sales workflow now exposes validation only and
+receives no database credentials. See `LEAN_PIPELINE.md` for the active direction.
+The remainder documents the historical recovery implementation and its tests.
+
 The old load entrypoint now defaults to local source validation. A code push
 does not launch a sales production load. Use the manual Load Polk Sales Feed
 workflow, which defaults to validate. Publication requires action=load, a

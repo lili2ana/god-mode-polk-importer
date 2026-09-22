@@ -64,8 +64,49 @@ export function buildHandler(deps: Dependencies) {
         return json({ ok: false, error: "Unauthorized" }, 401);
       }
       const user = data.user;
-      if (user.is_anonymous !== false || !operators.includes(user.id)) {
+      if (
+        user.is_anonymous !== false || !operators.includes(user.id) ||
+        !user.email_confirmed_at
+      ) {
         return json({ ok: false, error: "Forbidden" }, 403);
+      }
+      // Decode only AFTER Auth has verified this exact token. This is not a
+      // signature verifier. Bind its session to the server-confirmed user.
+      let claims;
+      try {
+        const parts = token.split(".");
+        if (parts.length !== 3) throw Error("Invalid JWT shape");
+        const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+        claims = JSON.parse(
+          atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, "=")),
+        );
+      } catch {
+        return json({ ok: false, error: "Unauthorized" }, 401);
+      }
+      if (
+        !claims || claims.sub !== user.id ||
+        claims.iss !== `${PROJECT_URL}/auth/v1` ||
+        claims.role !== "authenticated" || claims.aud !== "authenticated" ||
+        typeof claims.session_id !== "string" ||
+        !UUID.test(claims.session_id) ||
+        !Number.isSafeInteger(claims.exp) || claims.exp <= Date.now() / 1000
+      ) {
+        return json({ ok: false, error: "Unauthorized" }, 401);
+      }
+      // Auth getUser alone does not prove an issued JWT's session still exists.
+      // No cache: a completed logout must deny subsequent sensitive reads.
+      const session = await auth.rpc("god_mode_operator_session_active", {
+        requested_user: user.id,
+        requested_session: claims.session_id,
+      });
+      if (session.error) {
+        return json(
+          { ok: false, error: "Session verification unavailable" },
+          503,
+        );
+      }
+      if (session.data !== true) {
+        return json({ ok: false, error: "Unauthorized" }, 401);
       }
       const route = view === "dashboard"
         ? "god-mode-dashboard?format=json"

@@ -3,7 +3,8 @@
 `god-mode-operator-read` provides the server authorization boundary for a future
 private dashboard/CRM interface. It accepts a user's Bearer access token, calls
 Supabase Auth `getUser(token)` on every request, and requires the returned UUID
-to appear in the server-only `GOD_MODE_OPERATOR_USER_IDS` allowlist. Missing or
+to appear in the server-only `GOD_MODE_OPERATOR_USER_IDS` allowlist. A confirmed
+email and an active Auth session belonging to that UUID are also required. Missing or
 malformed configuration fails closed. Anonymous users, public/machine credentials,
 unapproved users and editable metadata cannot grant access. No operator is seeded.
 
@@ -22,8 +23,8 @@ not `getSession` or unchecked client claims; see the
 
 ## Gates before production
 
-1. Resolve the already-requested operator email without assuming identity from
-   a GitHub or Supabase dashboard administrator session. Bind the approved account
+1. The operator email has been selected and recorded privately; do not put it in
+   source code or assume mailbox ownership from that selection. Bind the approved account
    to its actual Auth UUID; do not authorize an email or user-editable metadata.
 2. Implement and verify the chosen login/refresh/logout route and frontend host.
    No CORS is configured here: use a same-origin server integration, or separately
@@ -32,8 +33,8 @@ not `getSession` or unchecked client claims; see the
 3. Verify real valid/expired/revoked tokens, a second unapproved user, sign-out,
    account removal, and operator disable against the actual Auth service. Local
    tests use a fake Auth client and are not production JWT/session evidence.
-   In particular, `getUser` is not represented as immediate session revocation;
-   add an active-session check if logout must immediately invalidate issued JWTs.
+   An active-session check is now implemented and tested with fixtures, but real
+   hosted Auth login/logout behavior must still be demonstrated.
 4. Configure the allowlist only after account verification and prove authorized
    dashboard/CRM reads plus negative probes. Review frontend token storage and
    token-free server/access logging before enabling operator access.
@@ -42,7 +43,31 @@ The existing five service endpoints and daily jobs are unchanged. No new functio
 environment variable, user, database grant, login email or frontend has been
 deployed by this preparation. No profile cutover or seller outreach is enabled.
 
-Local validation: all 52 Deno handler tests passed, including ten new operator
-cases for identity isolation, missing configuration, metadata spoofing, fixed
-read routing, credential/header isolation, upstream errors and bounded CRM data.
-CI now discovers all function test files rather than only `security_test.ts`.
+## Active-session boundary (READY, not deployed)
+
+After `getUser` verifies the exact supplied token, the handler decodes its claims
+and validates issuer, audience, role, expiry, subject and session UUID. Decoding
+never substitutes for Auth signature verification. A service-only boolean RPC
+then checks `auth.sessions` against the confirmed user's UUID on every read.
+The actual hosted column names were inspected read-only before implementation.
+
+The session must exist and have no elapsed `not_after`; its user must be email
+confirmed, non-anonymous, not deleted and not currently banned. Missing sessions,
+lookup errors and malformed results deny access before any dashboard/CRM request.
+No session result is cached. This follows the documented
+[Supabase logout/session guidance](https://supabase.com/docs/guides/auth/sessions).
+It does not promise cancellation of an already-authorized request or enforce
+additional inactivity/single-session rules beyond the checked database state.
+
+The migration creates a fixed `SECURITY DEFINER` lookup with an empty search path.
+Only `service_role` can call it; PUBLIC, anon and authenticated cannot. It exposes
+no Auth records and grants no direct table access. Apply the migration before the
+handler; without it the handler fails closed. Rollback disables the new operator
+route or clears its allowlist, rather than restoring a session-blind reader.
+Do not change the five existing private service endpoints or daily jobs.
+
+Local validation: all 58 Deno handler tests passed, including 16 operator cases.
+Four new disposable PostgreSQL tests cover service-only execution, cross-user
+sessions, removal, expiry and user-state checks. They require CI's PostgreSQL 17
+fixture; fixture success does not prove hosted login/logout or browser behavior.
+CI discovers all function test files rather than only `security_test.ts`.

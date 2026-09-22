@@ -2,6 +2,26 @@ import { buildHandler } from "../god-mode-operator-read/handler.ts";
 const id = "11111111-1111-4111-8111-111111111111";
 const other = "22222222-2222-4222-8222-222222222222";
 const secret = "sb_secret_fixture_server_only";
+const sessionId = "33333333-3333-4333-8333-333333333333";
+function jwt(overrides: Record<string, unknown> = {}) {
+  const claims = {
+    sub: id,
+    session_id: sessionId,
+    role: "authenticated",
+    aud: "authenticated",
+    iss: "https://bnsmnztxkqmphvbikaxh.supabase.co/auth/v1",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+    ...overrides,
+  };
+  // Fake Auth verifies these fixtures; not a signed production JWT.
+  return `fixture.${
+    btoa(JSON.stringify(claims)).replace(/=/g, "").replace(/\+/g, "-").replace(
+      /\//g,
+      "_",
+    )
+  }.fixture`;
+}
+const validToken = jwt();
 const counts = {
   properties: 10,
   residential: 6,
@@ -22,9 +42,13 @@ function fixture(
     env?: Record<string, string>;
     reply?: () => Response;
     fetchThrow?: boolean;
+    sessionActive?: unknown;
+    sessionError?: boolean;
+    sessionThrow?: boolean;
   } = {},
 ) {
   const authTokens: string[] = [],
+    sessionCalls: unknown[] = [],
     reads: Array<{ url: string; init?: RequestInit }> = [];
   const env: Record<string, string> = {
     SUPABASE_URL: "https://bnsmnztxkqmphvbikaxh.supabase.co",
@@ -45,12 +69,26 @@ function fixture(
             return {
               data: {
                 user: options.user === undefined
-                  ? { id, is_anonymous: false }
+                  ? {
+                    id,
+                    is_anonymous: false,
+                    email_confirmed_at: "2026-09-22T00:00:00Z",
+                  }
                   : options.user,
               },
               error: options.authError ? { message: secret } : null,
             };
           },
+        },
+        rpc: async (name: string, args: unknown) => {
+          sessionCalls.push({ name, args });
+          if (options.sessionThrow) throw Error(secret);
+          return {
+            data: options.sessionActive === undefined
+              ? true
+              : options.sessionActive,
+            error: options.sessionError ? { message: secret } : null,
+          };
         },
         from: () => {
           throw Error("No direct business query permitted");
@@ -65,11 +103,11 @@ function fixture(
         : Response.json({ ok: true, counts, secret_leak: secret });
     },
   });
-  return { h, authTokens, reads, env };
+  return { h, authTokens, sessionCalls, reads, env };
 }
 const request = (
   query = "view=dashboard",
-  token = "user.access.token",
+  token = validToken,
   method = "GET",
 ) =>
   new Request(`https://example.invalid?${query}`, {
@@ -148,7 +186,14 @@ Deno.test("operator: dashboard route verifies identity first and exposes no back
   const f = fixture();
   const r = await f.h(request());
   const b = await r.json();
-  eq(f.authTokens, ["user.access.token"]);
+  eq(f.authTokens, [validToken]);
+  eq(f.sessionCalls, [{
+    name: "god_mode_operator_session_active",
+    args: {
+      requested_user: id,
+      requested_session: sessionId,
+    },
+  }]);
   eq(f.reads.length, 1);
   eq(
     f.reads[0].url,
@@ -253,5 +298,65 @@ Deno.test("operator: removing approved UUID denies the next request", async () =
   eq((await f.h(request())).status, 200);
   f.env.GOD_MODE_OPERATOR_USER_IDS = other;
   eq((await f.h(request())).status, 403);
+  eq(f.reads.length, 1);
+});
+Deno.test("operator: unconfirmed email is denied before session lookup", async () => {
+  const f = fixture({
+    user: { id, is_anonymous: false, email_confirmed_at: null },
+  });
+  eq((await f.h(request())).status, 403);
+  eq(f.sessionCalls, []);
+  eq(f.reads, []);
+});
+Deno.test("operator: malformed and mismatched claims cannot reach session lookup", async () => {
+  const tokens = [
+    "user.access.token",
+    "a.e30.b.c",
+    "a.bnVsbA.b",
+    jwt({ sub: other }),
+    jwt({ session_id: "invalid" }),
+    jwt({ session_id: null }),
+    jwt({ exp: 0 }),
+    jwt({ exp: "99999999999" }),
+    jwt({ iss: "https://attacker.invalid/auth/v1" }),
+    jwt({ aud: "anon" }),
+    jwt({ role: "service_role" }),
+  ];
+  for (const token of tokens) {
+    const f = fixture();
+    eq((await f.h(request("", token))).status, 401);
+    eq(f.sessionCalls, []);
+    eq(f.reads, []);
+  }
+});
+Deno.test("operator: rejected Auth never invokes privileged session lookup", async () => {
+  const f = fixture({ authError: true });
+  eq((await f.h(request())).status, 401);
+  eq(f.sessionCalls, []);
+  eq(f.reads, []);
+});
+Deno.test("operator: missing/revoked session and nonboolean results fail closed", async () => {
+  for (const sessionActive of [false, null, "true", [], { active: true }]) {
+    const f = fixture({ sessionActive });
+    eq((await f.h(request())).status, 401);
+    eq(f.reads, []);
+  }
+});
+Deno.test("operator: session lookup errors deny without leaking credentials", async () => {
+  for (const options of [{ sessionError: true }, { sessionThrow: true }]) {
+    const f = fixture(options);
+    const r = await f.h(request());
+    eq(r.status, 503);
+    eq((await r.text()).includes(secret), false);
+    eq(f.reads, []);
+  }
+});
+Deno.test("operator: session revocation is checked again on the next read", async () => {
+  const options = { sessionActive: true };
+  const f = fixture(options);
+  eq((await f.h(request())).status, 200);
+  options.sessionActive = false;
+  eq((await f.h(request())).status, 401);
+  eq(f.sessionCalls.length, 2);
   eq(f.reads.length, 1);
 });

@@ -5,6 +5,7 @@ on:
       - '*.py'
       - 'tests/**'
       - 'supabase/migrations/**'
+      - 'supabase/functions/**'
       - 'importer_parts/**'
       - 'requirements-test.txt'
       - '.github/workflows/test-sales-recovery.yml'
@@ -38,3 +39,7 @@ jobs:
           python-version: '3.11'
       - run: pip install -r requirements-test.txt
       - run: python -m unittest discover -s tests -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npx --yes deno@2.5.2 test supabase/functions/tests/security_test.ts

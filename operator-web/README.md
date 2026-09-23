@@ -209,6 +209,15 @@ Never approve the first observed user or trust editable `user_metadata`, display
 names, the selected email or repository ownership. After review, stop the setup
 server and complete real workspace login/refresh/logout/negative checks.
 
+If the code exchange creates an Auth session but the subsequent confirmed-user
+lookup fails, the shared OAuth adapter attempts a bounded remote sign-out of that
+session only (`scope=local`) and clears its verifier/session memory. Rejected
+identity never yields workspace tokens or an enrollment observation. A failed
+sign-out remains explicitly unconfirmed; no remote error body or token is
+included in the adapter error. Tests cover successful cleanup and HTTP/transport
+failures for both providers using the pinned SDK with fake transport. This is not
+proof of hosted session removal.
+
 Twelve new handler tests cover browser binding, duplicate/parallel replay,
 expiration, cancellation during exchange/start, scope rejection, revocation and
 evidence-write failures. They use fixture adapters; live provider credential

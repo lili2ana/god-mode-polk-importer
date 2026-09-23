@@ -56,19 +56,48 @@ export function oauthLogin(
           if (error || !data.session) {
             throw Error("Provider code exchange failed");
           }
-          const user = await client.auth.getUser(data.session.access_token);
-          if (
-            user.error || !user.data.user?.email_confirmed_at ||
-            user.data.user.is_anonymous
-          ) {
-            throw Error("Verified provider identity required");
+          try {
+            const user = await client.auth.getUser(data.session.access_token);
+            if (
+              user.error || !user.data.user?.email_confirmed_at ||
+              user.data.user.is_anonymous
+            ) {
+              throw Error("Verified provider identity required");
+            }
+            return {
+              access_token: data.session.access_token,
+              refresh_token: data.session.refresh_token,
+              expires_at: data.session.expires_at ?? 0,
+              userId: user.data.user.id,
+            };
+          } catch {
+            // Auth may have issued a session before the fresh identity check
+            // failed. Revoke only that session; never sign out other devices.
+            let revoked = false;
+            try {
+              const response = await boundedFetch(
+                project + "/auth/v1/logout?scope=local",
+                {
+                  method: "POST",
+                  headers: {
+                    apikey: key,
+                    authorization: `Bearer ${data.session.access_token}`,
+                  },
+                },
+              );
+              await response.body?.cancel();
+              revoked = response.ok;
+            } catch {
+              // Do not expose a remote body, transport error or credential.
+            } finally {
+              memory.clear();
+            }
+            throw Error(
+              revoked
+                ? "Verified provider identity required"
+                : "Provider identity rejected; remote revocation unconfirmed",
+            );
           }
-          return {
-            access_token: data.session.access_token,
-            refresh_token: data.session.refresh_token,
-            expires_at: data.session.expires_at ?? 0,
-            userId: user.data.user.id,
-          };
         },
       };
     } catch {

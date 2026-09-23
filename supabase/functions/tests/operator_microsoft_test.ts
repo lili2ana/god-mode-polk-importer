@@ -212,9 +212,24 @@ for (const provider of ["azure", "github"] as const) {
       " SDK: unconfirmed, anonymous and failed confirmed-user lookups fail closed",
     async () => {
       for (const state of ["unconfirmed", "anonymous", "error"]) {
-        let lookups = 0;
-        const request: typeof fetch = async (input) => {
-          if (new URL(String(input)).pathname.endsWith("/token")) {
+        let lookups = 0, revocations = 0;
+        const request: typeof fetch = async (input, init) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/logout")) {
+            eq(url.href, project + "/auth/v1/logout?scope=local");
+            eq(init?.method, "POST");
+            eq(
+              new Headers(init?.headers).get("authorization"),
+              `Bearer ${access}`,
+            );
+            eq(
+              new Headers(init?.headers).get("apikey"),
+              "sb_publishable_fixture",
+            );
+            revocations++;
+            return new Response(null, { status: 204 });
+          }
+          if (url.pathname.endsWith("/token")) {
             return Response.json({
               access_token: access,
               refresh_token: refresh,
@@ -247,6 +262,52 @@ for (const provider of ["azure", "github"] as const) {
         }
         eq(denied, true);
         eq(lookups, 1);
+        eq(revocations, 1);
+      }
+    },
+  );
+  Deno.test(
+    provider +
+      " SDK: rejected identity reports unconfirmed cleanup without leaking errors",
+    async () => {
+      for (const failure of ["http", "transport"]) {
+        let revocations = 0;
+        const request: typeof fetch = async (input) => {
+          const url = new URL(String(input));
+          if (url.pathname.endsWith("/token")) {
+            return Response.json({
+              access_token: access,
+              refresh_token: refresh,
+              expires_in: 3600,
+              token_type: "bearer",
+              user: { id: operator },
+            });
+          }
+          if (url.pathname.endsWith("/user")) {
+            return Response.json({ id: operator, email_confirmed_at: null });
+          }
+          eq(url.href, project + "/auth/v1/logout?scope=local");
+          revocations++;
+          if (failure === "transport") throw Error(access + refresh);
+          return new Response(access + refresh, { status: 503 });
+        };
+        const flow = await beginLogin("sb_publishable_fixture", request)(
+          origin + "/oauth/callback?flow=test",
+        );
+        let message = "";
+        try {
+          await flow.exchange(code);
+        } catch (error) {
+          message = (error as Error).message;
+        } finally {
+          flow.dispose();
+        }
+        eq(
+          message,
+          "Provider identity rejected; remote revocation unconfirmed",
+        );
+        eq(revocations, 1);
+        eq(message.includes(access) || message.includes(refresh), false);
       }
     },
   );

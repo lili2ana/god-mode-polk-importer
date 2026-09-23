@@ -168,6 +168,52 @@ References: [GitHub OAuth app registration](https://docs.github.com/en/apps/oaut
 
 ## Verification and limitations
 
+### Initial account observation (READY locally, not executed with hosted Auth)
+
+`enroll-server.ts` is a separate loopback-only setup entrypoint, disabled unless
+`GOD_MODE_ENROLLMENT_ENABLED=true`. It resolves the circular dependency where the
+workspace requires an approved Auth UUID before the operator has signed in once.
+It uses the same fixed GitHub authorize URL validator and isolated PKCE adapter,
+but has no dashboard/CRM dependency, workspace cookies, refresh route, operator
+allowlist or automatic approval. No placeholder UUID is used.
+
+After the browser-bound, single-use callback, the adapter checks the confirmed
+user through Auth. Enrollment requests remote sign-out before recording only the
+observed UUID, timestamp, successful sign-out response and
+`authorizationGranted:false` in ignored
+`.polk_import/operator-enrollment-observation.json`. Tokens never enter that file
+or browser responses. A failed write or remote sign-out does not report success.
+The file is created exclusively; an existing or partial observation blocks restart
+and requires review. Windows directory permissions still govern local privacy.
+
+Run from the repository root only after the provider credentials, narrow callback
+allowlist and enrollment release approval are verified:
+
+```powershell
+$env:GOD_MODE_ENROLLMENT_ENABLED='true'
+# SUPABASE_PUBLISHABLE_KEY must already contain the public project key.
+npx --yes deno@2.5.2 run --lock=operator-web/deno.lock --frozen --allow-env=GOD_MODE_ENROLLMENT_ENABLED,SUPABASE_PUBLISHABLE_KEY --allow-net=127.0.0.1:4319,bnsmnztxkqmphvbikaxh.supabase.co --allow-read=.polk_import --allow-write=.polk_import/operator-enrollment-observation.json operator-web/enroll-server.ts
+```
+
+The setup origin is `http://127.0.0.1:4319`; the callback is
+`/enroll/callback?flow=<random browser-bound value>`. Determine and test the narrow
+Supabase redirect allowlist before launching; do not permit unrelated hosts or
+arbitrary callbacks. No launch/provider enablement is performed by adding this
+entrypoint. The initial browser consent may create an Auth account.
+
+An observation is **not operator approval or proof of which GitHub account owns
+the UUID**. Independently reconcile that UUID's server-controlled provider identity
+against the intended operator, inspect confirmed user/session state and verify
+actual session revocation before binding the gateway's exact UUID allowlist.
+Never approve the first observed user or trust editable `user_metadata`, display
+names, the selected email or repository ownership. After review, stop the setup
+server and complete real workspace login/refresh/logout/negative checks.
+
+Twelve new handler tests cover browser binding, duplicate/parallel replay,
+expiration, cancellation during exchange/start, scope rejection, revocation and
+evidence-write failures. They use fixture adapters; live provider credential
+validation and hosted enrollment remain release gates.
+
 Thirteen local web-handler tests cover sign-in, session renewal, sign-out, UUID
 isolation, cross-origin rejection, throttling, bounded inputs, escaping and token
 isolation. These use fake Auth/read adapters: they do not establish email delivery

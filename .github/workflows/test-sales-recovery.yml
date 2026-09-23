@@ -44,4 +44,4 @@ jobs:
         with:
           node-version: '22'
       - run: npx --yes deno@2.5.2 test --lock=operator-web/deno.lock --frozen supabase/functions/tests
-      - run: npx --yes deno@2.5.2 check --lock=operator-web/deno.lock --frozen operator-web/server.ts
+      - run: npx --yes deno@2.5.2 check --lock=operator-web/deno.lock --frozen operator-web/server.ts operator-web/enroll-server.ts

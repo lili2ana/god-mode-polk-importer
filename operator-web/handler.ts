@@ -1,3 +1,4 @@
+import { safeAuthorize } from "./oauth-url.ts";
 // Single-process private web interface. No Auth tokens are stored in the browser.
 export type Tokens = {
   access_token: string;
@@ -58,7 +59,6 @@ export function buildWeb(deps: WebDependencies) {
   const oauth = deps.github ?? deps.microsoft;
   const provider = deps.github ? "github" : "azure";
   const providerLabel = deps.github ? "GitHub" : "Microsoft";
-  const expectedScope = deps.github ? "user:email" : "email";
   const now = deps.now ?? Date.now;
   const sessions = new Map<string, Session>();
   type Flow =
@@ -226,36 +226,7 @@ export function buildWeb(deps: WebDependencies) {
             503,
           );
         }
-        if (
-          authorize.origin !== "https://bnsmnztxkqmphvbikaxh.supabase.co" ||
-          authorize.pathname !== "/auth/v1/authorize" || authorize.username ||
-          authorize.password || authorize.hash ||
-          authorize.searchParams.get("provider") !== provider ||
-          authorize.searchParams.get("scopes") !== expectedScope ||
-          [...authorize.searchParams.keys()].some((key) =>
-            ![
-              "provider",
-              "redirect_to",
-              "scopes",
-              "code_challenge",
-              "code_challenge_method",
-            ].includes(key)
-          ) ||
-          authorize.searchParams.get("redirect_to") !== callback ||
-          authorize.searchParams.get("code_challenge_method")?.toLowerCase() !==
-            "s256" ||
-          !/^[A-Za-z0-9_-]{43}$/.test(
-            authorize.searchParams.get("code_challenge") ?? "",
-          ) ||
-          [
-            "provider",
-            "redirect_to",
-            "scopes",
-            "code_challenge",
-            "code_challenge_method",
-          ]
-            .some((k) => authorize.searchParams.getAll(k).length !== 1)
-        ) {
+        if (!safeAuthorize(authorize.href, callback, provider)) {
           started.dispose();
           return page(
             `<h1>${providerLabel} sign-in is not configured safely.</h1>`,

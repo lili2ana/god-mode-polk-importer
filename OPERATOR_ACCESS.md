@@ -52,6 +52,13 @@ deployed by this preparation. No profile cutover or seller outreach is enabled.
 
 ## Active-session boundary (READY, not deployed)
 
+The separate local `operator-web/enroll-server.ts` now supplies an enrollment-only
+observation route without requiring a pre-existing approved UUID. It grants no
+workspace access and writes no allowlist. Its confirmed Auth UUID observation must
+be reconciled with the intended operator's server-controlled provider identity
+before approval; see the web README. This preparation has not created an account,
+enabled a provider or verified a hosted login.
+
 After `getUser` verifies the exact supplied token, the handler decodes its claims
 and validates issuer, audience, role, expiry, subject and session UUID. Decoding
 never substitutes for Auth signature verification. A service-only boolean RPC

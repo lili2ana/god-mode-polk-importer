@@ -104,6 +104,10 @@ export function buildWeb(deps: WebDependencies) {
       location: "/",
       "set-cookie": cookie(id, age),
     });
+  // Native form POSTs need their real Origin; no-referrer makes it null.
+  // Only form documents use same-origin. Callback/redirect pages stay private.
+  const formPage = (body: string) =>
+    page(body, 200, { "referrer-policy": "same-origin" });
   let lastSend = -Infinity,
     lastOAuth = -Infinity,
     attemptWindow = 0,
@@ -315,7 +319,7 @@ export function buildWeb(deps: WebDependencies) {
         }
         lastSend = now();
         await deps.sendCode();
-        return page(verify);
+        return formPage(verify);
       }
       if (req.method === "POST" && url.pathname === "/verify-code") {
         if (!deps.emailEnabled) {
@@ -382,7 +386,7 @@ export function buildWeb(deps: WebDependencies) {
       if (req.method !== "GET" || !["/", "/crm"].includes(url.pathname)) {
         return page("<h1>Page not found</h1>", 404);
       }
-      if (!session) return page(login);
+      if (!session) return formPage(login);
       try {
         await ready(id, session);
       } catch {
@@ -442,7 +446,7 @@ export function buildWeb(deps: WebDependencies) {
           content += "<tr><td>No contacts ready for review.</td></tr>";
         }
       }
-      return page(
+      return formPage(
         `<h1>${
           view === "crm" ? "CRM review" : "Your property workspace"
         }</h1>${nav}<section><table>${content}</table></section>`,

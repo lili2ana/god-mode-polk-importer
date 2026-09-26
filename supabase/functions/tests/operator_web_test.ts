@@ -154,6 +154,50 @@ Deno.test("web: email requests require same-origin POST and are throttled", asyn
   eq((await f.handler(f.request("/request-code", "POST"))).status, 429);
   eq(f.calls.send, 1);
 });
+Deno.test("web: native form pages preserve Origin without weakening POST checks", async () => {
+  const f = fixture();
+  eq(
+    (await f.handler(f.request())).headers.get("referrer-policy"),
+    "same-origin",
+  );
+  for (const path of ["/request-code", "/verify-code", "/logout"]) {
+    for (
+      const source of [
+        undefined,
+        "null",
+        "http://localhost:4317",
+        "https://evil.test",
+      ]
+    ) {
+      const response = await f.handler(
+        new Request(origin + path, {
+          method: "POST",
+          headers: source === undefined ? {} : { origin: source },
+        }),
+      );
+      eq(response.status, 403);
+    }
+  }
+  eq(f.calls, { send: 0, verify: 0, refresh: 0, logout: 0, read: 0 });
+  eq(
+    (await f.handler(f.request("/request-code", "POST"))).headers.get(
+      "referrer-policy",
+    ),
+    "same-origin",
+  );
+  const cookie = await f.signIn();
+  for (const path of ["/", "/crm"]) {
+    eq(
+      (await f.handler(f.request(path, "GET", cookie))).headers.get(
+        "referrer-policy",
+      ),
+      "same-origin",
+    );
+  }
+  const logout = await f.handler(f.request("/logout", "POST", cookie));
+  eq(logout.status, 303);
+  eq(logout.headers.get("referrer-policy"), "no-referrer");
+});
 Deno.test("web: wrong host and query credentials rejected without Auth calls", async () => {
   const f = fixture();
   eq((await f.handler(new Request("http://evil.invalid/"))).status, 400);

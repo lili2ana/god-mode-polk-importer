@@ -201,6 +201,15 @@ Supabase redirect allowlist before launching; do not permit unrelated hosts or
 arbitrary callbacks. No launch/provider enablement is performed by adding this
 entrypoint. The initial browser consent may create an Auth account.
 
+Enrollment and workspace documents containing native POST forms use
+`Referrer-Policy: same-origin`. `no-referrer` makes browser form submissions
+send `Origin: null`, which the exact-origin POST check rejects. Callback,
+redirect and provider-link responses retain `no-referrer`; cross-origin
+referrers remain suppressed. Missing, null, foreign and alternate loopback
+origins remain rejected. A real browser form submission is required when
+verifying this behavior; constructing a Request with an Origin header does
+not exercise the browser's referrer policy.
+
 An observation is **not operator approval or proof of which GitHub account owns
 the UUID**. Independently reconcile that UUID's server-controlled provider identity
 against the intended operator, inspect confirmed user/session state and verify

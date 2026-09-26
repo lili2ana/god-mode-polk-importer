@@ -85,6 +85,10 @@ export function buildEnrollment(deps: Dependencies) {
           completed
             ? "<p>Account observation recorded for review. Workspace access has not been granted. You can close this page.</p>"
             : '<p>Sign in to identify the account you want to use. This may create an authentication account, but grants no access to property or CRM records.</p><form method="post" action="/enroll/start"><button>Identify my GitHub account</button></form>',
+          200,
+          // no-referrer makes native form POSTs send Origin: null.
+          // Keep the exact-origin check and disclose no cross-origin referrer.
+          completed ? {} : { "referrer-policy": "same-origin" },
         );
       }
       if (req.method === "GET" && url.pathname === "/failed") {

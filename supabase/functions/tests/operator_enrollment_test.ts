@@ -129,6 +129,39 @@ Deno.test("enrollment rejects cross-origin start and foreign host", async () => 
   );
   eq(f.calls.start, 0);
 });
+Deno.test("enrollment form preserves Origin while callback referrers stay suppressed", async () => {
+  const f = fixture();
+  const landing = await f.handler(new Request(origin + "/"));
+  eq(landing.headers.get("referrer-policy"), "same-origin");
+  for (
+    const source of [
+      undefined,
+      "null",
+      "http://localhost:4319",
+      "https://evil.test",
+    ]
+  ) {
+    const denied = await f.handler(
+      new Request(origin + "/enroll/start", {
+        method: "POST",
+        headers: source === undefined ? {} : { origin: source },
+      }),
+    );
+    eq(denied.status, 403);
+  }
+  eq(f.calls.start, 0);
+  const s = await f.start();
+  eq(s.response.headers.get("referrer-policy"), "no-referrer");
+  const callback = await f.handler(
+    new Request(s.url, { headers: { cookie: s.cookie } }),
+  );
+  eq(callback.status, 303);
+  eq(callback.headers.get("referrer-policy"), "no-referrer");
+  eq(
+    (await f.handler(new Request(origin + "/"))).headers.get("referrer-policy"),
+    "no-referrer",
+  );
+});
 Deno.test("enrollment requires bound single cookie and callback state", async () => {
   const f = fixture(), s = await f.start();
   for (

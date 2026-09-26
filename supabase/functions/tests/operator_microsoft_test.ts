@@ -115,7 +115,9 @@ for (const provider of ["azure", "github"] as const) {
       ": login UI identifies selected provider and rejects scope/provider changes",
     async () => {
       const f = fixture();
-      const html = await (await f.handler(f.req("/"))).text();
+      const landing = await f.handler(f.req("/"));
+      eq(landing.headers.get("referrer-policy"), "same-origin");
+      const html = await landing.text();
       eq(
         html.includes(
           provider === "github"

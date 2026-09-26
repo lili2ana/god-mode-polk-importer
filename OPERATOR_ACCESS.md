@@ -1,4 +1,22 @@
-# Operator read gateway — READY, not deployed
+# Operator read gateway — local operator access verified
+
+September 26 update (supersedes preparation status below): the approved operator
+completed provider identity verification and explicitly authorized read-only access.
+The service-only active-session migration and gateway v1 are deployed. Actual
+browser login, dashboard counts, capped CRM reads and logout succeeded. Independent
+SQL matched all five counts and found no remaining session after logout; replaying
+that session's JWT against the gateway returned 401. Anonymous, public-key and
+forged-token reads returned 401. Account identifiers and evidence remain private.
+
+This verifies the local, single-process workspace with hosted Auth and gateway;
+it is not a public hosted frontend release. Natural refresh/expiry, a second
+unapproved real identity, account removal and operator-disable checks remain open.
+The historical preparation notes below describe the design and remaining gates.
+
+Native form documents now use same-origin referrer policy while callbacks and
+redirects retain no-referrer. A rejected workspace gate also attempts local-scope
+Auth logout of newly issued tokens, including upstream failures and cancellation;
+failed cleanup is not reported as confirmed logout.
 
 `god-mode-operator-read` provides the server authorization boundary for a future
 private dashboard/CRM interface. It accepts a user's Bearer access token, calls

@@ -137,25 +137,37 @@ export function buildWeb(deps: WebDependencies) {
     oldId: string,
     stillAllowed: () => boolean = () => true,
   ) {
-    if (!validTokens(tokens) || !stillAllowed()) {
-      return page("<h1>Sign-in could not be verified.</h1>", 403);
+    let issued = false;
+    try {
+      if (!validTokens(tokens) || !stillAllowed()) {
+        return page("<h1>Sign-in could not be verified.</h1>", 403);
+      }
+      const gate = await deps.read(tokens.access_token, "dashboard");
+      if (!gate.ok || (await gate.json())?.ok !== true || !stillAllowed()) {
+        return page("<h1>Workspace access is not ready.</h1>", 403);
+      }
+      if (sessions.size >= 50) {
+        return page("<h1>Sign-in temporarily unavailable.</h1>", 503);
+      }
+      sessions.delete(oldId);
+      const fresh = crypto.randomUUID() + crypto.randomUUID();
+      sessions.set(fresh, {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: tokens.expires_at,
+        deadline: now() + 8 * 3600000,
+      });
+      issued = true;
+      return redirect(fresh, 8 * 3600);
+    } finally {
+      // A successful Auth exchange must not leave a session behind when the
+      // workspace gate, capacity check, or in-flight cancellation rejects it.
+      if (!issued && tokens.access_token) {
+        try {
+          await deps.logout(tokens.access_token);
+        } catch { /* Cleanup is unconfirmed; never claim verified sign-out. */ }
+      }
     }
-    const gate = await deps.read(tokens.access_token, "dashboard");
-    if (!gate.ok || (await gate.json())?.ok !== true || !stillAllowed()) {
-      return page("<h1>Workspace access is not ready.</h1>", 403);
-    }
-    if (sessions.size >= 50) {
-      return page("<h1>Sign-in temporarily unavailable.</h1>", 503);
-    }
-    sessions.delete(oldId);
-    const fresh = crypto.randomUUID() + crypto.randomUUID();
-    sessions.set(fresh, {
-      access_token: tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expires_at: tokens.expires_at,
-      deadline: now() + 8 * 3600000,
-    });
-    return redirect(fresh, 8 * 3600);
   }
   async function ready(id: string, session: Session) {
     if (session.expires_at * 1000 <= now() + 60000) {

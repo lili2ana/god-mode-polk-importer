@@ -29,7 +29,14 @@ for (const provider of ["azure", "github"] as const) {
     } = {},
   ) {
     let time = Date.now(), callback = "";
-    const calls = { start: 0, exchange: 0, dispose: 0, read: 0, email: 0 };
+    const calls = {
+      start: 0,
+      exchange: 0,
+      dispose: 0,
+      read: 0,
+      email: 0,
+      logout: 0,
+    };
     const tokens = () => ({
       access_token: access,
       refresh_token: refresh,
@@ -48,7 +55,9 @@ for (const provider of ["azure", "github"] as const) {
       },
       verifyCode: async () => tokens(),
       refresh: async () => tokens(),
-      logout: async () => {},
+      logout: async () => {
+        calls.logout++;
+      },
       read: async () => {
         calls.read++;
         if (options.readWait) await options.readWait;
@@ -408,6 +417,7 @@ for (const provider of ["azure", "github"] as const) {
           false,
         );
         if (options.wrongUser) eq(f.calls.read, 0);
+        eq(f.calls.logout, 1);
       }
     },
   );

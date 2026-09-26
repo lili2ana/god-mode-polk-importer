@@ -1,4 +1,11 @@
-# Private operator web interface — READY locally, not production login
+# Private operator web interface — local login and reads verified
+
+September 26: the approved operator's real GitHub login, dashboard, capped CRM
+review and logout have been verified against hosted Auth and gateway v1. Logout
+removed the Auth session, and replay of the revoked token returned 401. The local
+workspace remains single-process/loopback-only. Natural refresh/expiry and the
+additional identity/disable gates in OPERATOR_ACCESS.md remain unverified; this is
+not a hosted multi-user frontend release. Historical setup notes below are retained.
 
 This single-process Deno server supplies a sign-in form, one-time-code form,
 dashboard counts and a capped CRM review table. It listens only on 127.0.0.1.

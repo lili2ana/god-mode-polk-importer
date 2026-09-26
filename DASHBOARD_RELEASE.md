@@ -1,5 +1,12 @@
 # Private inventory dashboard boundary
 
+September 26: real operator login exposed timeouts in the residential/land exact
+counts. The property-type covering index migration removes the wide sequential
+scans without changing count semantics, data, permissions or failure handling.
+The verified plan uses an index-only scan (about 123 ms in the measured run).
+All five dashboard counts then matched independent SQL through the deployed
+operator gateway, and the CRM view returned the existing maximum of 200 rows.
+
 The deployed v2 dashboard performed five privileged inventory/lead count queries
 without authenticating the request. It had no CRM or profile reader and rendered
 a blanket LIVE message even when queries failed (missing counts became zero).

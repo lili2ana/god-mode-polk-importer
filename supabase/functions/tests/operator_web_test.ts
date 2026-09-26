@@ -22,6 +22,7 @@ function fixture(
     refreshFails?: boolean;
     readStatus?: number;
     readWait?: Promise<void>;
+    readThrows?: boolean;
   } = {},
 ) {
   let time = Date.now();
@@ -63,6 +64,7 @@ function fixture(
     read: async (token, view) => {
       eq(token, access);
       calls.read++;
+      if (options.readThrows) throw Error("private upstream failure");
       if (options.readWait) await options.readWait;
       return Response.json(
         view === "dashboard" ? { ok: true, counts } : {
@@ -197,6 +199,27 @@ Deno.test("web: native form pages preserve Origin without weakening POST checks"
   const logout = await f.handler(f.request("/logout", "POST", cookie));
   eq(logout.status, 303);
   eq(logout.headers.get("referrer-policy"), "no-referrer");
+});
+Deno.test("web: rejected workspace gates revoke newly issued Auth sessions", async () => {
+  for (
+    const options of [
+      { wrongUser: true },
+      { readStatus: 503 },
+      { readThrows: true },
+      { readStatus: 503, logoutFails: true },
+    ]
+  ) {
+    const f = fixture(options);
+    const response = await f.handler(
+      f.request("/verify-code", "POST", "", "code=123456"),
+    );
+    eq([403, 503].includes(response.status), true);
+    eq(f.calls.logout, 1);
+    eq(response.headers.has("set-cookie"), false);
+    const body = await response.text();
+    eq(body.includes(access), false);
+    eq(body.includes("verified logout"), false);
+  }
 });
 Deno.test("web: wrong host and query credentials rejected without Auth calls", async () => {
   const f = fixture();

@@ -6,6 +6,7 @@ on:
       - 'tests/**'
       - 'supabase/migrations/**'
       - 'supabase/functions/**'
+      - 'operator-web/**'
       - 'importer_parts/**'
       - 'requirements-test.txt'
       - '.github/workflows/test-sales-recovery.yml'
@@ -42,4 +43,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npx --yes deno@2.5.2 test supabase/functions/tests/security_test.ts
+      - run: npx --yes deno@2.5.2 test --lock=operator-web/deno.lock --frozen supabase/functions/tests
+      - run: npx --yes deno@2.5.2 check --lock=operator-web/deno.lock --frozen operator-web/server.ts operator-web/enroll-server.ts

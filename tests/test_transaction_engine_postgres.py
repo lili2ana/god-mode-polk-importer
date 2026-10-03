@@ -266,6 +266,7 @@ class TransactionEnginePostgresTests(unittest.TestCase):
                 "SELECT god_mode_ops.set_gate(%s,'SOURCE_RISK','PASS','{}'::jsonb,'test')",
                 (deal_id,),
             )
+        self.q("SELECT god_mode_ops.refresh_deal_gates(%s)", (deal_id,))
 
     def approve_offer(self, deal_id):
         snapshot_id = self.q(

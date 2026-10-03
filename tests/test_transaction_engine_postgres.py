@@ -35,6 +35,7 @@ class TransactionEnginePostgresTests(unittest.TestCase):
                 """
                 DROP SCHEMA IF EXISTS god_mode_ops CASCADE;
                 DROP SCHEMA IF EXISTS cron CASCADE;
+                DROP EXTENSION IF EXISTS pgcrypto CASCADE;
                 DROP SCHEMA IF EXISTS extensions CASCADE;
                 DROP TABLE IF EXISTS public.outreach_events CASCADE;
                 DROP TABLE IF EXISTS public.buyer_matches CASCADE;

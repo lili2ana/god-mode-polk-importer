@@ -430,6 +430,14 @@ class TransactionEnginePostgresTests(unittest.TestCase):
 
         self.q(
             """
+            INSERT INTO god_mode_ops.deal_approvals(
+              deal_id,deal_snapshot_id,approval_type,actor_type,actor_id
+            ) VALUES(%s,%s,'ACQUISITION_SIGNATURE','human_operator','lili')
+            """,
+            (deal_id, snapshot_id),
+        )
+        self.q(
+            """
             INSERT INTO god_mode_ops.esign_envelopes(
               contract_id,provider,idempotency_key,status
             ) VALUES(%s,'test-provider',%s,'PREPARED')
@@ -506,6 +514,14 @@ class TransactionEnginePostgresTests(unittest.TestCase):
 
         self.q(
             """
+            INSERT INTO god_mode_ops.deal_approvals(
+              deal_id,deal_snapshot_id,approval_type,actor_type,actor_id
+            ) VALUES(%s,%s,'ACQUISITION_SIGNATURE','human_operator','lili')
+            """,
+            (deal_id, snapshot_id),
+        )
+        self.q(
+            """
             INSERT INTO god_mode_ops.esign_envelopes(
               contract_id,provider,idempotency_key,status
             ) VALUES(%s,'test-provider','same-envelope-intent','PREPARED')
@@ -521,6 +537,86 @@ class TransactionEnginePostgresTests(unittest.TestCase):
                 """,
                 (contract_id,),
             )
+
+    def test_renderer_requires_approved_complete_template_and_esign_requires_signature_approval(self):
+        _, _, deal_id = self.make_deal("VACANT LAND", "render")
+        snapshot_id = self.advance_to_human_approved(deal_id)
+        template_id = self.q(
+            """
+            INSERT INTO god_mode_ops.contract_templates(
+              template_key,version,jurisdiction,asset_type,contract_type,content,
+              required_variables,status,approved_by,approved_at,effective_from
+            ) VALUES(
+              'render-test',1,'Florida','LAND','ACQUISITION',
+              'Seller {{seller_name}} | Parcel {{parcel_id}} | Legal {{legal_description}} | Price {{purchase_price}} | EMD {{earnest_money}} | Close {{closing_date}}',
+              ARRAY['seller_name','parcel_id','legal_description','purchase_price','earnest_money','closing_date'],
+              'APPROVED','lili',now(),current_date
+            ) RETURNING id
+            """
+        )[0]
+
+        with self.assertRaises(psycopg2.Error):
+            self.q(
+                "SELECT god_mode_ops.render_contract_draft(%s,%s,'{}'::jsonb,%s)",
+                (deal_id, template_id, f"render:{deal_id}"),
+            )
+
+        contract_id = self.q(
+            """
+            SELECT god_mode_ops.render_contract_draft(
+              %s,%s,'{"closing_date":"2026-10-30"}'::jsonb,%s
+            )
+            """,
+            (deal_id, template_id, f"render:{deal_id}"),
+        )[0]
+        self.assertEqual(
+            self.q("SELECT state FROM god_mode_ops.deal_workflow WHERE deal_id=%s", (deal_id,))[0],
+            "CONTRACT_DRAFTED",
+        )
+        payload = self.q(
+            "SELECT rendered_payload FROM god_mode_ops.contracts WHERE id=%s",
+            (contract_id,),
+        )[0]
+        self.assertIn("2026-10-30", payload["document_text"])
+        self.assertNotIn("{{", payload["document_text"])
+        self.assertTrue(payload["requires_human_signature"])
+        self.assertEqual(
+            self.q(
+                """
+                SELECT god_mode_ops.render_contract_draft(
+                  %s,%s,'{"closing_date":"2026-10-30"}'::jsonb,%s
+                )
+                """,
+                (deal_id, template_id, f"render:{deal_id}"),
+            )[0],
+            contract_id,
+        )
+
+        with self.assertRaises(psycopg2.Error):
+            self.q(
+                "SELECT god_mode_ops.prepare_esign_intent(%s,'docusign',%s,'{}'::jsonb)",
+                (contract_id, f"esign:{contract_id}"),
+            )
+
+        self.q(
+            """
+            INSERT INTO god_mode_ops.deal_approvals(
+              deal_id,deal_snapshot_id,approval_type,actor_type,actor_id
+            ) VALUES(%s,%s,'ACQUISITION_SIGNATURE','human_operator','lili')
+            """,
+            (deal_id, snapshot_id),
+        )
+        envelope_id = self.q(
+            "SELECT god_mode_ops.prepare_esign_intent(%s,'docusign',%s,'{}'::jsonb)",
+            (contract_id, f"esign:{contract_id}"),
+        )[0]
+        self.assertEqual(
+            self.q(
+                "SELECT god_mode_ops.prepare_esign_intent(%s,'docusign',%s,'{}'::jsonb)",
+                (contract_id, f"esign:{contract_id}"),
+            )[0],
+            envelope_id,
+        )
 
     def test_transaction_worker_never_creates_outreach_or_sent_buyer_messages(self):
         _, _, deal_id = self.make_deal("SINGLE FAMILY", "no-outreach")

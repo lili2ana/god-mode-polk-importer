@@ -217,16 +217,37 @@ class TransactionEnginePostgresTests(unittest.TestCase):
         return property_id, lead_id, deal_id
 
     def set_offer_gates(self, deal_id, source_status="PASS"):
-        for gate in (
-            "CONTACT_IDENTITY",
-            "COMPLIANCE",
-            "TITLE_LIENS",
-            "ACCESS",
-            "COMPS_QUALIFIED",
-            "UNDERWRITING",
-            "LEGAL_DESCRIPTION",
-            "ECONOMICS",
-        ):
+        # Evidence-backed gates are recalculated by refresh_deal_gates. Give the
+        # fixture real DD/legal rows instead of force-setting those statuses.
+        self.q(
+            """
+            INSERT INTO public.due_diligence_reviews(
+              property_id,status,title_status,access_status,comps_status,
+              underwriting_status,fatal_flags,completed_at
+            )
+            SELECT d.property_id,'completed','cleared','mapped_road_proximity_verified',
+                   'qualified','passed','[]'::jsonb,now()
+            FROM public.deals d
+            WHERE d.id=%s
+              AND NOT EXISTS (
+                SELECT 1 FROM public.due_diligence_reviews dd
+                WHERE dd.property_id=d.property_id AND dd.status='completed'
+              )
+            """,
+            (deal_id,),
+        )
+        self.q(
+            """
+            INSERT INTO public.polk_legal_v2(parcel_id,num,dscr)
+            SELECT p.parcel_id,'1','TEST LEGAL DESCRIPTION'
+            FROM public.deals d
+            JOIN public.properties p ON p.id=d.property_id
+            WHERE d.id=%s
+            ON CONFLICT(parcel_id,num) DO NOTHING
+            """,
+            (deal_id,),
+        )
+        for gate in ("CONTACT_IDENTITY", "COMPLIANCE"):
             self.q(
                 "SELECT god_mode_ops.set_gate(%s,%s,'PASS','{}'::jsonb,'test')",
                 (deal_id, gate),

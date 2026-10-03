@@ -12,6 +12,7 @@ MIGRATIONS = [
     ROOT / "supabase/migrations/20261003191244_transaction_engine_core.sql",
     ROOT / "supabase/migrations/20261003191417_transaction_hash_extension_resolution.sql",
     ROOT / "supabase/migrations/20261003191433_transaction_engine_hash_path.sql",
+    ROOT / "supabase/migrations/20261003192520_contract_rendering_esign_guard.sql",
 ]
 
 

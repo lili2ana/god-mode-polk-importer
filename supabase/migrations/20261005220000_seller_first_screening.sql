@@ -20,7 +20,7 @@ AS $function$
  and d.underwriting_status in ('qualified','approved','passed')
  and jsonb_typeof(d.fatal_flags)='array' and jsonb_array_length(d.fatal_flags)=0
  and d.completed_at>=now()-interval '7 days');
-$function$
+$function$;
 
 CREATE OR REPLACE FUNCTION god_mode_ops.screen_check_fresh(p_check jsonb)
 RETURNS boolean LANGUAGE sql STABLE SET search_path='' AS $$

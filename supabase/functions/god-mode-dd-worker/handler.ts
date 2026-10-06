@@ -93,13 +93,7 @@ export function buildHandler(deps: Dependencies) {
     let eligible;
     try { eligible = await eligibleRows(sb, rows ?? [], "dd"); }
     catch { return json({ ok: false, error: "Seller gate unavailable" }, 503); }
-    let zoningLayer: number | null = null, streetLayer: number | null = null;
-    try {
-      zoningLayer = await layerByName(
-        DEV,
-        /zoning|future.?land.?use|land.?use/i,
-      );
-    } catch (_) {}
+    let streetLayer: number | null = null;
     try {
       streetLayer = 5; // Verified Polk road-centerline feature layer.
     } catch (_) {}
@@ -224,26 +218,27 @@ export function buildHandler(deps: Dependencies) {
           };
         }
 
-        if (zoningLayer != null) {
-          const z = await pointHit(DEV, zoningLayer, x, y, "*");
-          const za = z?.features?.[0]?.attributes ?? null;
-          patch.zoning_status = za ? "verified_gis" : "review_required";
-          findings.zoning = {
-            source: "Polk County GIS Development Overlays",
-            checked_at: started,
-            layer: zoningLayer,
-            attributes: za,
-            source_error: !z,
-          };
-        } else {
-          patch.zoning_status = "review_required";
-          findings.zoning = {
-            source: "Polk County GIS",
-            checked_at: started,
-            note:
-              "No zoning/land-use layer auto-discovered in Development Overlays; human jurisdiction review required.",
-          };
-        }
+        // County FLU identifies municipal jurisdiction; CITY is never zoning clearance.
+        const landUseUrl = "https://gis.polk-county.net/hosting/rest/services/PublicViewer/Map_Land_Use_and_Zoning/MapServer";
+        const zoningResult = await pointHit(landUseUrl, 9, x, y, "FLUNAME,CITY_NAME,DEV_AREA,FLU_LDC");
+        const zoningAttributes = zoningResult?.features?.[0]?.attributes ?? null;
+        const classification = String(zoningAttributes?.FLUNAME ?? "").trim().toUpperCase();
+        patch.zoning_status = "review_required";
+        findings.zoning = {
+          source: "Polk County GIS Future Land Use 2030",
+          checked_at: started,
+          layer: 9,
+          classification: classification || null,
+          attributes: zoningAttributes,
+          jurisdiction: zoningAttributes?.CITY_NAME?.trim() || null,
+          source_error: !zoningResult,
+          screening_passed: false,
+          hold_reason: !zoningResult ? "zoning_source_unavailable"
+            : !zoningAttributes ? "zoning_no_spatial_match"
+            : classification === "CITY" ? "municipal_zoning_required"
+            : "land_use_permitted_use_review_required",
+          scope: "jurisdiction_and_land_use_only_not_buildability",
+        };
 
         if (streetLayer != null) {
           const s = await optionalGIS(q(`${STREETS}/${streetLayer}/query`, {

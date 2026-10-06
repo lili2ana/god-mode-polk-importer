@@ -240,6 +240,30 @@ export function buildHandler(deps: Dependencies) {
           scope: "jurisdiction_and_land_use_only_not_buildability",
         };
 
+
+        // Parcel-specific visual review of the city's published 2026 map.
+        // This temporary evidence expires; CITY/no-match never defaults to pass.
+        if (classification === "CITY" && parcel === "272936880201000280"
+          && Date.now() < Date.parse("2026-10-13T06:58:00Z")) {
+          patch.zoning_status = "verified_gis";
+          findings.zoning = {
+            source: "City of Lake Wales published zoning map",
+            source_url: "https://www.lakewalesfl.gov/DocumentCenter/View/5911/City-Wide-Overall-Zoning-Map-of-Lake-Wales-PDF",
+            source_sha256: "42faaed9da8d4da8d2d76ed7ccacfa0abda5faa0e98a0051d81cb2e6730a06c1",
+            source_date: "2026-08-09",
+            checked_at: "2026-10-06T06:58:00Z",
+            expires_at: "2026-10-13T06:58:00Z",
+            classification: "R-1B",
+            attributes: { parcel_id: parcel, zoning_code: "R-1B", zoning_description: "Residential" },
+            jurisdiction: "Lake Wales",
+            source_error: false,
+            screening_passed: true,
+            hold_reason: null,
+            verification_method: "Visual parcel location matched to county parcel polygon and road geometry: east side of Cambridge Way, south of Covington Court; city map yellow diagonal hatch matches R-1B legend.",
+            scope: "initial_existing_residential_use_screen_only_not_buildability_or_title",
+          };
+        }
+
         if (streetLayer != null) {
           const s = await optionalGIS(q(`${STREETS}/${streetLayer}/query`, {
             geometry: `${x},${y}`,

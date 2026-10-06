@@ -1,0 +1,24 @@
+{
+  "parcel_id": "272936880201000280",
+  "classification": "R-1B",
+  "scope": "initial residential screening only",
+  "source_url": "https://www.lakewalesfl.gov/DocumentCenter/View/5911/City-Wide-Overall-Zoning-Map-of-Lake-Wales-PDF",
+  "source_date": "2026-08-09",
+  "sha256": "42faaed9da8d4da8d2d76ed7ccacfa0abda5faa0e98a0051d81cb2e6730a06c1",
+  "reviewed_at": "2026-10-06T06:58:00Z",
+  "expires_at": "2026-10-13T06:58:00Z",
+  "method": "Matched county parcel polygon east side of Cambridge Way south of Covington Court to city map parcel outlines and road pattern. Yellow diagonal hatch matches R-1B residential legend.",
+  "pdf_crop_points": [
+    1080,
+    910,
+    1220,
+    1020
+  ],
+  "parcel_bounds": [
+    -81.56341546462669,
+    27.91196720920023,
+    -81.56309604759043,
+    27.912255965136556
+  ],
+  "limitations": "Published map visual initial screening, not legal buildability, title, survey or permit determination."
+}

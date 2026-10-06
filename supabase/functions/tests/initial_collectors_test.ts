@@ -11,6 +11,7 @@ for (const broken of [false,true]) {
     const u=String(url);requests.push(u);
     if(u.includes('wetlandsmapservice')&&broken)return new Response('{}',{status:500});
     if(u.includes('Map_Property_Appraiser'))return Response.json({features:[{attributes:{PARCELID:row.properties.parcel_id,NAME:'OWNER',AMTDUE:0},centroid:{x:-81.6,y:27.9}}]});
+    if(u.includes('Map_Land_Use_and_Zoning/MapServer/9/query'))return Response.json({features:broken?[]:[{attributes:{FLUNAME:'CITY',CITY_NAME:'Lake Wales'}}]});
     if(u.includes('Polk_Roads_Map/MapServer/5/query'))return Response.json({features:[{attributes:{PrimaryName:'CAMBRIDGE WAY'}}]});
     return Response.json(u.includes('/query')?{features:[]}:{layers:[]});
   }});
@@ -20,6 +21,9 @@ for (const broken of [false,true]) {
   assert.equal(calls.length,1);assert.ok(calls[0].includes('/0/query'));
   assert.equal(patches[0].findings.wetlands.hit,broken?null:false);
   assert.equal(patches[0].findings.wetlands.source_error,broken);
+  assert.equal(patches[0].zoning_status,'review_required');
+  assert.equal(patches[0].findings.zoning.screening_passed,false);
+  assert.equal(patches[0].findings.zoning.hold_reason,broken?'zoning_no_spatial_match':'municipal_zoning_required');
   assert.equal(patches[0].access_status,'verified_near_mapped_street');
   assert.equal(patches[0].findings.comps.count,3);
   assert.equal(patches[0].findings.comps.unqualified_candidate_median,200000);

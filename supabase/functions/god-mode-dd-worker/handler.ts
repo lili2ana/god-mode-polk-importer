@@ -24,15 +24,13 @@ export function buildHandler(deps: Dependencies) {
     const DEV =
       "https://gis.polk-county.net/server/rest/services/Map_Development_Overlays/MapServer";
     const STREETS =
-      "https://gis.polk-county.net/server/rest/services/Map_Street_and_Addresses/MapServer";
+      "https://gis.polk-county.net/hosting/rest/services/PolkRoads/Polk_Roads_Map/MapServer";
     const UTIL =
       "https://gis.polk-county.net/server/rest/services/Map_Utilities_Service_Area/MapServer";
     const FEMA =
       "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query";
     const NWI =
       "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer";
-    const SWF =
-      "https://www25.swfwmd.state.fl.us/arcgis12/rest/services/BaseVector/parcel_search/MapServer/14/query";
 
     function q(
       base: string,
@@ -103,7 +101,7 @@ export function buildHandler(deps: Dependencies) {
       );
     } catch (_) {}
     try {
-      streetLayer = await layerByName(STREETS, /street|road|centerline/i);
+      streetLayer = 5; // Verified Polk road-centerline feature layer.
     } catch (_) {}
     const results: any[] = [];
     for (const d of eligible) {
@@ -292,19 +290,12 @@ export function buildHandler(deps: Dependencies) {
           scope: "point_screen_only",
         };
 
-        const comps = await optionalGIS(q(SWF, {
-          geometry: `${x},${y}`,
-          geometryType: "esriGeometryPoint",
-          inSR: 4326,
-          distance: 5,
-          units: "esriSRUnit_StatuteMile",
-          spatialRel: "esriSpatialRelIntersects",
-          outFields:
-            "PARNO,PARUSEDESC,ACRES,PARVAL,SALE1_AMT,SALE1_DATE,YRBLT_ACT,SITEADD",
-          returnGeometry: false,
-          resultRecordCount: 100,
-          f: "json",
-        }));
+        const { data: compData, error: compError } = await sb.rpc(
+          "god_mode_initial_comp_candidates", { p_parcel: parcel },
+        );
+        const comps = !compError && Array.isArray(compData?.sample)
+          ? { features: compData.sample.map((attributes: any) => ({ attributes })) }
+          : null;
         const subjAc = Number(p.acreage ?? 0),
           isLand = String(p.property_type ?? "").toLowerCase() === "land";
         const sales = (comps?.features ?? []).map((c: any) =>
@@ -325,7 +316,9 @@ export function buildHandler(deps: Dependencies) {
         patch.comps_status = "review_required";
         findings.comps = {
           source:
-            "SWFWMD Polk County Parcels / Property Appraiser sales fields",
+            "Polk recent-sales shadow / same assessor neighborhood and use code",
+          source_coverage: "partial_staging_subset",
+          scope: "initial_screen_only_not_ARV",
           checked_at: started,
           count: vals.length,
           estimated_value: null,
@@ -333,8 +326,8 @@ export function buildHandler(deps: Dependencies) {
           qualification: "not_verified",
           source_error: !comps,
           method: isLand
-            ? "median nearby recorded sale price per acre x subject acreage"
-            : "median nearby recorded sale amount",
+            ? "median same-neighborhood/use recorded sale price per acre x subject acreage"
+            : "median same-neighborhood/use recorded sale amount",
           sample: sales.slice(0, 10),
         };
 

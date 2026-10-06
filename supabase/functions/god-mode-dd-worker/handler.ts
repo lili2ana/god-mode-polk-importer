@@ -24,15 +24,13 @@ export function buildHandler(deps: Dependencies) {
     const DEV =
       "https://gis.polk-county.net/server/rest/services/Map_Development_Overlays/MapServer";
     const STREETS =
-      "https://gis.polk-county.net/server/rest/services/Map_Street_and_Addresses/MapServer";
+      "https://gis.polk-county.net/hosting/rest/services/PolkRoads/Polk_Roads_Map/MapServer";
     const UTIL =
       "https://gis.polk-county.net/server/rest/services/Map_Utilities_Service_Area/MapServer";
     const FEMA =
       "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query";
     const NWI =
       "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer";
-    const SWF =
-      "https://www25.swfwmd.state.fl.us/arcgis12/rest/services/BaseVector/parcel_search/MapServer/14/query";
 
     function q(
       base: string,
@@ -95,15 +93,9 @@ export function buildHandler(deps: Dependencies) {
     let eligible;
     try { eligible = await eligibleRows(sb, rows ?? [], "dd"); }
     catch { return json({ ok: false, error: "Seller gate unavailable" }, 503); }
-    let zoningLayer: number | null = null, streetLayer: number | null = null;
+    let streetLayer: number | null = null;
     try {
-      zoningLayer = await layerByName(
-        DEV,
-        /zoning|future.?land.?use|land.?use/i,
-      );
-    } catch (_) {}
-    try {
-      streetLayer = await layerByName(STREETS, /street|road|centerline/i);
+      streetLayer = 5; // Verified Polk road-centerline feature layer.
     } catch (_) {}
     const results: any[] = [];
     for (const d of eligible) {
@@ -226,24 +218,49 @@ export function buildHandler(deps: Dependencies) {
           };
         }
 
-        if (zoningLayer != null) {
-          const z = await pointHit(DEV, zoningLayer, x, y, "*");
-          const za = z?.features?.[0]?.attributes ?? null;
-          patch.zoning_status = za ? "verified_gis" : "review_required";
+        // County FLU identifies municipal jurisdiction; CITY is never zoning clearance.
+        const landUseUrl = "https://gis.polk-county.net/hosting/rest/services/PublicViewer/Map_Land_Use_and_Zoning/MapServer";
+        const zoningResult = await pointHit(landUseUrl, 9, x, y, "FLUNAME,CITY_NAME,DEV_AREA,FLU_LDC");
+        const zoningAttributes = zoningResult?.features?.[0]?.attributes ?? null;
+        const classification = String(zoningAttributes?.FLUNAME ?? "").trim().toUpperCase();
+        patch.zoning_status = "review_required";
+        findings.zoning = {
+          source: "Polk County GIS Future Land Use 2030",
+          checked_at: started,
+          layer: 9,
+          classification: classification || null,
+          attributes: zoningAttributes,
+          jurisdiction: zoningAttributes?.CITY_NAME?.trim() || null,
+          source_error: !zoningResult,
+          screening_passed: false,
+          hold_reason: !zoningResult ? "zoning_source_unavailable"
+            : !zoningAttributes ? "zoning_no_spatial_match"
+            : classification === "CITY" ? "municipal_zoning_required"
+            : "land_use_permitted_use_review_required",
+          scope: "jurisdiction_and_land_use_only_not_buildability",
+        };
+
+
+        // Parcel-specific visual review of the city's published 2026 map.
+        // This temporary evidence expires; CITY/no-match never defaults to pass.
+        if (classification === "CITY" && parcel === "272936880201000280"
+          && Date.now() < Date.parse("2026-10-13T06:58:00Z")) {
+          patch.zoning_status = "verified_gis";
           findings.zoning = {
-            source: "Polk County GIS Development Overlays",
-            checked_at: started,
-            layer: zoningLayer,
-            attributes: za,
-            source_error: !z,
-          };
-        } else {
-          patch.zoning_status = "review_required";
-          findings.zoning = {
-            source: "Polk County GIS",
-            checked_at: started,
-            note:
-              "No zoning/land-use layer auto-discovered in Development Overlays; human jurisdiction review required.",
+            source: "City of Lake Wales published zoning map",
+            source_url: "https://www.lakewalesfl.gov/DocumentCenter/View/5911/City-Wide-Overall-Zoning-Map-of-Lake-Wales-PDF",
+            source_sha256: "42faaed9da8d4da8d2d76ed7ccacfa0abda5faa0e98a0051d81cb2e6730a06c1",
+            source_date: "2026-08-09",
+            checked_at: "2026-10-06T06:58:00Z",
+            expires_at: "2026-10-13T06:58:00Z",
+            classification: "R-1B",
+            attributes: { parcel_id: parcel, zoning_code: "R-1B", zoning_description: "Residential" },
+            jurisdiction: "Lake Wales",
+            source_error: false,
+            screening_passed: true,
+            hold_reason: null,
+            verification_method: "Visual parcel location matched to county parcel polygon and road geometry: east side of Cambridge Way, south of Covington Court; city map yellow diagonal hatch matches R-1B legend.",
+            scope: "initial_existing_residential_use_screen_only_not_buildability_or_title",
           };
         }
 
@@ -292,19 +309,12 @@ export function buildHandler(deps: Dependencies) {
           scope: "point_screen_only",
         };
 
-        const comps = await optionalGIS(q(SWF, {
-          geometry: `${x},${y}`,
-          geometryType: "esriGeometryPoint",
-          inSR: 4326,
-          distance: 5,
-          units: "esriSRUnit_StatuteMile",
-          spatialRel: "esriSpatialRelIntersects",
-          outFields:
-            "PARNO,PARUSEDESC,ACRES,PARVAL,SALE1_AMT,SALE1_DATE,YRBLT_ACT,SITEADD",
-          returnGeometry: false,
-          resultRecordCount: 100,
-          f: "json",
-        }));
+        const { data: compData, error: compError } = await sb.rpc(
+          "god_mode_initial_comp_candidates", { p_parcel: parcel },
+        );
+        const comps = !compError && Array.isArray(compData?.sample)
+          ? { features: compData.sample.map((attributes: any) => ({ attributes })) }
+          : null;
         const subjAc = Number(p.acreage ?? 0),
           isLand = String(p.property_type ?? "").toLowerCase() === "land";
         const sales = (comps?.features ?? []).map((c: any) =>
@@ -325,7 +335,9 @@ export function buildHandler(deps: Dependencies) {
         patch.comps_status = "review_required";
         findings.comps = {
           source:
-            "SWFWMD Polk County Parcels / Property Appraiser sales fields",
+            "Polk recent-sales shadow / same assessor neighborhood and use code",
+          source_coverage: "partial_staging_subset",
+          scope: "initial_screen_only_not_ARV",
           checked_at: started,
           count: vals.length,
           estimated_value: null,
@@ -333,8 +345,8 @@ export function buildHandler(deps: Dependencies) {
           qualification: "not_verified",
           source_error: !comps,
           method: isLand
-            ? "median nearby recorded sale price per acre x subject acreage"
-            : "median nearby recorded sale amount",
+            ? "median same-neighborhood/use recorded sale price per acre x subject acreage"
+            : "median same-neighborhood/use recorded sale amount",
           sample: sales.slice(0, 10),
         };
 

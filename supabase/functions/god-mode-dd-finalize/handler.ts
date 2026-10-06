@@ -1,3 +1,4 @@
+import { eligibleRows } from "../_shared/gates.ts";
 import { type Dependencies, json, protect } from "../_shared/auth.ts";
 import {
   amount,
@@ -37,8 +38,11 @@ export function buildHandler(deps: Dependencies) {
         status: 500,
       });
     }
+    let eligible;
+    try { eligible = await eligibleRows(sb, rows ?? [], "dd"); }
+    catch { return json({ ok: false, error: "Seller gate unavailable" }, 503); }
     const out: any[] = [];
-    for (const d of rows ?? []) {
+    for (const d of eligible) {
       if (Date.now() >= deadline) break;
       const p: any = (d as any).properties;
       const parcel = String(p.parcel_id ?? "");
@@ -92,7 +96,14 @@ export function buildHandler(deps: Dependencies) {
         const roadHit = rd.features?.[0]?.attributes ?? null;
         const assessed = amount(p.assessed_value);
         const prelimMao = null;
-        findings.zoning = {
+        const priorZoning = findings.zoning;
+        const keepVerifiedMap = d.zoning_status === "verified_gis"
+          && priorZoning?.source === "City of Lake Wales published zoning map"
+          && priorZoning?.attributes?.parcel_id === parcel
+          && priorZoning?.screening_passed === true
+          && priorZoning?.source_error === false
+          && Date.parse(priorZoning?.expires_at ?? "") > Date.now();
+        findings.zoning = keepVerifiedMap ? priorZoning : {
           source: "Polk County PublicViewer Future Land Use 2030",
           checked_at: now,
           layer: 9,
@@ -101,7 +112,15 @@ export function buildHandler(deps: Dependencies) {
           note:
             "Future land use is authoritative county GIS planning data; parcel-specific zoning/legal interpretation may still require jurisdiction review.",
         };
-        findings.access = {
+        const priorAccess = findings.access;
+        const keepFreshAccess = !roadHit
+          && ["verified_near_mapped_street","mapped_road_proximity_verified"].includes(d.access_status)
+          && !!(priorAccess?.nearby_street || priorAccess?.nearby_road)
+          && priorAccess?.source_error !== true
+          && Date.parse(priorAccess?.checked_at ?? "") > Date.now() - 7 * 86400000;
+        findings.access = keepFreshAccess ? {
+          ...priorAccess, refresh_no_match_or_error: true, refresh_attempted_at: now,
+        } : {
           source: "Polk County road centerline GIS",
           checked_at: now,
           nearby_road: roadHit,
@@ -122,8 +141,8 @@ export function buildHandler(deps: Dependencies) {
           assessed_reference_value: assessed,
         };
         const patch: any = {
-          zoning_status: fa ? "future_land_use_verified" : "review_required",
-          access_status: roadHit
+          zoning_status: keepVerifiedMap ? "verified_gis" : fa ? "future_land_use_verified" : "review_required",
+          access_status: keepFreshAccess ? d.access_status : roadHit
             ? "mapped_road_proximity_verified"
             : "review_required",
           comps_status: "review_required",

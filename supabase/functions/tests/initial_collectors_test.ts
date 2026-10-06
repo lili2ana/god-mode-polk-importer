@@ -21,9 +21,9 @@ for (const broken of [false,true]) {
   assert.equal(calls.length,1);assert.ok(calls[0].includes('/0/query'));
   assert.equal(patches[0].findings.wetlands.hit,broken?null:false);
   assert.equal(patches[0].findings.wetlands.source_error,broken);
-  assert.equal(patches[0].zoning_status,'review_required');
-  assert.equal(patches[0].findings.zoning.screening_passed,false);
-  assert.equal(patches[0].findings.zoning.hold_reason,broken?'zoning_no_spatial_match':'municipal_zoning_required');
+  assert.equal(patches[0].zoning_status,broken?'review_required':'verified_gis');
+  assert.equal(patches[0].findings.zoning.screening_passed,!broken);
+  assert.equal(patches[0].findings.zoning.hold_reason,broken?'zoning_no_spatial_match':null);
   assert.equal(patches[0].access_status,'verified_near_mapped_street');
   assert.equal(patches[0].findings.comps.count,3);
   assert.equal(patches[0].findings.comps.unqualified_candidate_median,200000);

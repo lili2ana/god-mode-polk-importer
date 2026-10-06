@@ -112,7 +112,15 @@ export function buildHandler(deps: Dependencies) {
           note:
             "Future land use is authoritative county GIS planning data; parcel-specific zoning/legal interpretation may still require jurisdiction review.",
         };
-        findings.access = {
+        const priorAccess = findings.access;
+        const keepFreshAccess = !roadHit
+          && ["verified_near_mapped_street","mapped_road_proximity_verified"].includes(d.access_status)
+          && !!(priorAccess?.nearby_street || priorAccess?.nearby_road)
+          && priorAccess?.source_error !== true
+          && Date.parse(priorAccess?.checked_at ?? "") > Date.now() - 7 * 86400000;
+        findings.access = keepFreshAccess ? {
+          ...priorAccess, refresh_no_match_or_error: true, refresh_attempted_at: now,
+        } : {
           source: "Polk County road centerline GIS",
           checked_at: now,
           nearby_road: roadHit,
@@ -134,7 +142,7 @@ export function buildHandler(deps: Dependencies) {
         };
         const patch: any = {
           zoning_status: keepVerifiedMap ? "verified_gis" : fa ? "future_land_use_verified" : "review_required",
-          access_status: roadHit
+          access_status: keepFreshAccess ? d.access_status : roadHit
             ? "mapped_road_proximity_verified"
             : "review_required",
           comps_status: "review_required",

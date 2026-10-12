@@ -22,14 +22,17 @@ end $$;
 
 create or replace function god_mode_ops.run_county_automation(p_limit integer default 2,p_force boolean default false)
 returns jsonb language plpgsql security invoker set search_path = '' as $$
-declare gis_result jsonb; qualification jsonb; dd_result jsonb; leads_result jsonb;
+declare gis_result jsonb; qualification jsonb; dd_result jsonb; leads_result jsonb; market_result jsonb;
 begin
   if current_user not in ('postgres','service_role') then raise exception 'backend only'; end if;
   gis_result := god_mode_ops.run_county_gis_queue(null,p_limit,p_force);
+  perform god_mode_ops.refresh_county_qualification();
+  perform god_mode_ops.sync_county_dd_holds();
+  market_result := god_mode_ops.refresh_lee_market_evidence(p_limit);
   qualification := god_mode_ops.refresh_county_qualification();
   dd_result := god_mode_ops.sync_county_dd_holds();
   leads_result := god_mode_ops.materialize_county_qualified_leads();
-  return jsonb_build_object('gis',gis_result,'qualification',qualification,'dd',dd_result,'leads',leads_result);
+  return jsonb_build_object('gis',gis_result,'market',market_result,'qualification',qualification,'dd',dd_result,'leads',leads_result);
 end $$;
 revoke all on function god_mode_ops.materialize_county_qualified_leads(),god_mode_ops.run_county_automation(integer,boolean) from public,anon,authenticated;
 grant execute on function god_mode_ops.materialize_county_qualified_leads(),god_mode_ops.run_county_automation(integer,boolean) to service_role;

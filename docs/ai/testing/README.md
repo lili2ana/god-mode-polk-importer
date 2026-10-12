@@ -12,3 +12,12 @@ tests and final SQL assertions are required before reporting deployment status.
 No live positive qualified-lead result exists. No exact recorded frontage or
 legal-access approval was validated. No authenticated interactive Edge Function
 end-to-end test was added. Capture these limitations in completion reporting.
+
+Follow-up checks passed: `lee_sales_evidence_test.sql`,
+`osceola_connector_test.sql`, `recorded_document_intake_test.sql`, existing
+preflight/qualification/lead rollback tests, two Python document parser tests,
+and Node screening regression. Live combined worker refreshed the Lee market
+snapshot and left the real parcel on only recorded-access and seller-distress
+holds. Original Osceola certificate remains invalid; alternate PA GIS transport
+passed with verification enabled. Document download credentials and real title
+review remain required. OCR fallback has not been exercised on a real clerk PDF.

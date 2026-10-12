@@ -96,3 +96,66 @@ Lead test fixtures roll back. Existing Node GIS regression remains applicable.
 
 Roll back scheduling by deactivating job 11 with cron.alter_job(11,active:=false).
 Do not drop evidence or broaden contact-release permissions to get a pass.
+
+## October 12 follow-up: recorded documents, Osceola, Lee sales
+
+Deployed `lee_sales_evidence.sql`, updated the endpoint allowlist and combined
+scheduler. The official authoritative Lee view (ArcGIS item
+`a69c335ad6e54fc0872f7ed47208f11e`, owner `LeeCountyFLGIS`) is synchronized
+nightly from LeePA. Its public endpoint requires no key. The collector binds
+STRAP, stores source attributes, filters comparable acreage and matching zoning,
+vacant-at-sale, qualified transfer codes 01/02 (including override), positive
+price, two-year sale window, and <=2km geodesic distance. It deduplicates clerk
+instruments. Code 05 bulk prices are excluded. These are rough comps, not an
+appraisal, marketability, zoning entitlement or buildability approval.
+
+The live held parcel `334426L3030160020` returned RS-1 and 186 distinct filtered
+sales. Its owner mailing city is Lehigh Acres and sale dates are null. No verified
+seller-distress signal was created from those attributes. `seller_indicators`
+remain REVIEW_REQUIRED. Verified lis-pendens/tax evidence still requires current
+records bound to the current parcel and owner; missing data is not a negative
+search certificate.
+
+Osceola now uses the official Property Appraiser host `paags.property-appraiser.org`
+with TLS verification enabled: `FabricParcel/MapServer/0` (native `PARCELID`, not
+space-padded `strap`) and `APPDATA_DBO_streetcenterlines/MapServer/0`. Live exact
+polygon and spatial road queries passed from Supabase. The original county host
+certificate was not repaired. Road surface/maintenance attributes are absent in
+this replacement, so surface remains REVIEW. No archived 2025 polygon is used
+as current coverage.
+
+`recorded_document_review.py` processes authorized PDF downloads with text
+extraction and OCR fallback, SHA-256, page-indexed candidate excerpts and explicit
+REVIEW_REQUIRED. Backend `stage_recorded_document(jsonb)` stores the result only
+under research and cannot approve access. Local CLI ingestion is ready; it is
+not a running remote document-download worker. Required executables: pdfinfo,
+pdftotext, pdftoppm and tesseract. Download access remains unresolved. Lee Clerk
+publishes a customer FTP route for daily images, indices and plats. Obtain an
+authorized download/FTP account or title-vendor entitlement through its normal
+process; no stealth, residential proxy, CAPTCHA-solving service or TLS disabling.
+Do not put credentials in git or chat. For the held lot request PB 15 PG 100,
+Unit 3, Block 16, Lot 2 plus applicable subsequent access/restriction records.
+
+Live combined run at 20:58 UTC: GIS processed 1; market refreshed 1/failed 0;
+qualification evaluated 1/qualified 0; DD synced 2; leads created 0/outreach 0.
+Remaining holds: RECORDED_FRONTAGE_AND_ACCESS_REVIEW, SELLER_DISTRESS. The nine
+prior Lee flood rejections were not promoted or reopened. Charlotte validation
+lot remains rejected. Daily combined job remains 07:15 UTC.
+
+Fresh tests: Lee comp inclusion/exclusion assertions; Osceola exact identity and
+spatial roads; recorded document intake rollback and rejection of approved
+payload; Python extraction tests; existing preflight, qualification and lead
+materialization rollback tests; Node GIS regression. No real recorded-document
+OCR/approval, positive Lee distress or fully qualified lead was demonstrated.
+
+For a third-party distress feed, ATTOM documents foreclosure, recording date,
+instrument number and delinquent amount in `/saleshistory/expandedhistory`:
+https://api.developer.attomdata.com/docs . An ATTOM API key with the applicable
+foreclosure entitlement would be required. No key was supplied for this work;
+this provider is researched, not live-integrated. Historical foreclosure entries
+must not automatically prove current distress or absence of a release. Lee Clerk
+bulk recording data/images list $3,520/year; do not purchase automatically.
+
+Final worker rerun after initialization-order fix at 21:00 UTC gave the same
+1 refreshed, 0 failures, 0 qualified/created result. New candidates now get a
+preliminary qualification result and DD shell before market evidence is saved.

@@ -4,7 +4,7 @@ do $$ declare c text; cfg jsonb; response extensions.http_response; sample text;
 begin
   perform set_config('http.curlopt_timeout_ms','8000',true);
   perform set_config('http.curlopt_connecttimeout_ms','3000',true);
-  foreach c in array array['lee','charlotte','marion','highlands','polk','sarasota'] loop
+  foreach c in array array['lee','charlotte','marion','highlands','polk','sarasota','osceola'] loop
     cfg := god_mode_ops.county_gis_config(c);
     begin
       -- Pagination here discovers one ID only; the exact-ID response below

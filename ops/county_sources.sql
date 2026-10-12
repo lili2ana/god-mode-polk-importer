@@ -26,6 +26,10 @@ from (values
   'PARCELID','OBJECTID,PARCELID,PR_STRAP',
   'https://gis.polk-county.net/hosting/rest/services/All-In-One_Viewer/Roads_Map/MapServer/43/query',
   'OBJECTID,SURFTYPE,UNITDESC,OWN,SERVSTAT',null),
+ ('osceola','https://paags.property-appraiser.org/server/rest/services/FabricParcel/MapServer/0/query',
+  'PARCELID','OBJECTID,PARCELID,strap,dsp_strap',
+  'https://paags.property-appraiser.org/server/rest/services/APPDATA_DBO_streetcenterlines/MapServer/0/query',
+  'OBJECTID,STREET',null),
  ('sarasota','https://services3.arcgis.com/icrWMv7eBkctFu1f/arcgis/rest/services/ParcelHosted/FeatureServer/0/query',
   'ID','OBJECTID,ID,ACCOUNT',
   'https://services3.arcgis.com/icrWMv7eBkctFu1f/ArcGIS/rest/services/Cartegraph_Pavement_3_view/FeatureServer/0/query',
@@ -51,10 +55,11 @@ $$;
 create or replace function god_mode_ops.gis_endpoint_allowed(p_endpoint text)
 returns boolean language sql immutable set search_path = '' as $$
 select coalesce(p_endpoint in (
+ 'https://services2.arcgis.com/LvWGAAhHwbCJ2GMP/arcgis/rest/services/Lee_County_Parcels/FeatureServer/0/query',
  'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query',
  'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/0/query'
 ) or exists (
- select 1 from unnest(array['lee','charlotte','marion','highlands','polk','sarasota']) c
+ select 1 from unnest(array['lee','charlotte','marion','highlands','polk','sarasota','osceola']) c
  cross join lateral (select god_mode_ops.county_gis_config(c) cfg) v
  where p_endpoint in (cfg->>'parcel_endpoint',cfg->>'road_endpoint',cfg->>'row_endpoint')
 ),false)

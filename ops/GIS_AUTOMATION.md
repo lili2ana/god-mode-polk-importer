@@ -1,5 +1,8 @@
 # GIS queue deployment — October 12, 2026
 
+This records the earlier Lee-only deployment. The later combined county worker
+and current job-11 command are documented in [COUNTY_INTEGRATION.md](COUNTY_INTEGRATION.md).
+
 The scheduled Lee worker now retrieves a fresh parcel polygon for each pending
 candidate, verifies its identity, and saves FEMA, NWI, and road evidence. It does
 not depend on historical geometry evidence and needs no interactive operator

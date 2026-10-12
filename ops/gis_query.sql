@@ -15,19 +15,20 @@ begin
   if current_user not in ('postgres','service_role') then
     raise exception 'backend only';
   end if;
-  if p_endpoint not in (
-    'https://gismapserver.leegov.com/gisserver910/rest/services/DataExplorer/Parcels/MapServer/0/query',
-    'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query',
-    'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/0/query',
-    'https://gismapserver.leegov.com/gisserver910/rest/services/Layers/RoadCenterlines/MapServer/2/query'
-  ) or p_endpoint is null or jsonb_typeof(p_params) is distinct from 'object' then
+  if not god_mode_ops.gis_endpoint_allowed(p_endpoint)
+    or jsonb_typeof(p_params) is distinct from 'object' then
     raise exception 'invalid GIS request';
   end if;
   perform set_config('http.curlopt_timeout_ms','8000',true);
   perform set_config('http.curlopt_connecttimeout_ms','3000',true);
   for attempt in 1..2 loop
     begin
-      response := extensions.http_get(p_endpoint, p_params || '{"f":"json"}'::jsonb);
+      -- Hosted ArcGIS services reject some long polygon GET URLs (observed 404).
+      if length(extensions.urlencode(p_params))>1500 then
+        response := extensions.http_post(p_endpoint, p_params || '{"f":"json"}'::jsonb);
+      else
+        response := extensions.http_get(p_endpoint, p_params || '{"f":"json"}'::jsonb);
+      end if;
       if response.status = 200 then
         data := response.content::jsonb;
         if god_mode_ops.gis_response_complete(data) then
@@ -46,7 +47,7 @@ begin
       failures := failures || jsonb_build_array(jsonb_build_object('kind','transport_or_json','sqlstate',sqlstate));
     end;
   end loop;
-  return jsonb_build_object('ok',false,'attempts',attempt,'failures',failures);
+  return jsonb_build_object('ok',false,'attempts',jsonb_array_length(failures),'failures',failures);
 end $$;
 revoke all on function god_mode_ops.gis_response_complete(jsonb) from public,anon,authenticated;
 revoke all on function god_mode_ops.gis_query(text,jsonb) from public,anon,authenticated;

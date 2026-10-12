@@ -75,7 +75,13 @@ jobs:
                   'foreclosure_records_returned':sum(bool(p.get('foreclosure')) for p in properties),
                   'foreclosure_entitlement':'Not established by a successful HTTP response alone'}))
           except urllib.error.HTTPError as error:
-              print(json.dumps({'http_status':error.code,'status':'ATTOM_REQUEST_REJECTED'}));raise SystemExit(1)
+              raw=error.read(65536)
+              try:
+                  details=json.loads(raw).get('status',{})
+                  message=str(details.get('msg','')).replace(key,'[REDACTED]')[:200]
+                  code=details.get('code')
+              except (ValueError,AttributeError):message='Non-JSON provider error';code=None
+              print(json.dumps({'http_status':error.code,'status':'ATTOM_REQUEST_REJECTED','provider_code':code,'provider_message':message}));raise SystemExit(1)
           except (urllib.error.URLError,TimeoutError,ValueError):
               raise SystemExit('ATTOM transport or JSON failure')
           PY

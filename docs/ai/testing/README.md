@@ -21,3 +21,19 @@ snapshot and left the real parcel on only recorded-access and seller-distress
 holds. Original Osceola certificate remains invalid; alternate PA GIS transport
 passed with verification enabled. Document download credentials and real title
 review remain required. OCR fallback has not been exercised on a real clerk PDF.
+
+
+Current follow-up: 10 Python tests passed, including authenticated loopback
+HTTP upload with real PDF extraction, TIFF conversion, APN/FIPS mismatch and
+historical-distress candidate handling. New SQL distress threshold assertions
+and live Osceola network check passed. Live combined re-evaluation at 21:15 UTC
+on October 12 processed the single active Lehigh hold: comps pass, frontage/access
+and distress still missing, 0 qualified/created. Port Charlotte has no active
+hold; its prior flood rejection stays rejected. Credentialed FTP/ATTOM retrieval,
+remote workflow and database connection from that workflow remain unverified.
+
+Final SQL rollback verified that a submitted VERIFIED distress payload is
+stored as REVIEW_REQUIRED, leaving zero synthetic distress records. Anonymous
+intake execution and authenticated table reads both returned false. Advisors
+reported expected private-table RLS/no-policy information and the pre-existing
+unrelated Auth password-protection warning; no public grants were added.

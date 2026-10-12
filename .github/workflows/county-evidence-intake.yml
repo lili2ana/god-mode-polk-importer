@@ -1,0 +1,59 @@
+name: County document and distress intake
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Committed JSON document manifest (no secrets or signed URLs)
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: county-evidence-intake
+  cancel-in-progress: false
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOD_MODE_DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+      ATTOM_API_KEY: ${{ secrets.ATTOM_API_KEY }}
+      LEE_FTP_HOST: ${{ secrets.LEE_FTP_HOST }}
+      LEE_FTP_USER: ${{ secrets.LEE_FTP_USER }}
+      LEE_FTP_PASSWORD: ${{ secrets.LEE_FTP_PASSWORD }}
+      DOCUMENT_PROVIDER_HOST: ${{ vars.DOCUMENT_PROVIDER_HOST }}
+      DOCUMENT_API_KEY: ${{ secrets.DOCUMENT_API_KEY }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y poppler-utils tesseract-ocr
+          pip install -r ops/requirements-evidence.txt
+      - name: Configure optional database root certificate
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT')
+          if cert:
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'database-root.crt';path.write_text(cert)
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(path)+'\n')
+          PY
+      - name: Test intake and schema behavior
+        run: python -m unittest discover -s ops -p '*_test.py'
+      - name: Download and extract selected documents
+        if: ${{ inputs.manifest_path != '' }}
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          python - <<'PY'
+          import os,pathlib,subprocess,sys
+          root=pathlib.Path.cwd();p=(root/os.environ['MANIFEST_PATH']).resolve()
+          if not p.is_relative_to(root) or not p.is_file() or p.suffix!='.json':raise SystemExit('Invalid manifest path')
+          subprocess.run([sys.executable,'ops/evidence_pipeline.py','manifest','--manifest',str(p),'--inbox',os.environ['RUNNER_TEMP']+'/document-inbox'],check=True)
+          PY
+      - name: Fetch distress candidates and re-evaluate target holds
+        run: python ops/evidence_pipeline.py queue

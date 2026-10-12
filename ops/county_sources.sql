@@ -28,7 +28,7 @@ from (values
   'OBJECTID,SURFTYPE,UNITDESC,OWN,SERVSTAT',null),
  ('osceola','https://paags.property-appraiser.org/server/rest/services/FabricParcel/MapServer/0/query',
   'PARCELID','OBJECTID,PARCELID,strap,dsp_strap',
-  'https://paags.property-appraiser.org/server/rest/services/APPDATA_DBO_streetcenterlines/MapServer/0/query',
+  'https://services6.arcgis.com/9zKHLCgIwu2HFA5O/arcgis/rest/services/Centerlines/FeatureServer/0/query',
   'OBJECTID,STREET',null),
  ('sarasota','https://services3.arcgis.com/icrWMv7eBkctFu1f/arcgis/rest/services/ParcelHosted/FeatureServer/0/query',
   'ID','OBJECTID,ID,ACCOUNT',
@@ -56,6 +56,7 @@ create or replace function god_mode_ops.gis_endpoint_allowed(p_endpoint text)
 returns boolean language sql immutable set search_path = '' as $$
 select coalesce(p_endpoint in (
  'https://services2.arcgis.com/LvWGAAhHwbCJ2GMP/arcgis/rest/services/Lee_County_Parcels/FeatureServer/0/query',
+ 'https://services1.arcgis.com/9AYCAcYVeEGk3ZMt/arcgis/rest/services/Maintained_Roadways/FeatureServer/1/query',
  'https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query',
  'https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/Wetlands/MapServer/0/query'
 ) or exists (

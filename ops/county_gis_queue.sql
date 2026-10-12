@@ -67,6 +67,12 @@ begin
       insert into god_mode_ops.gis_worker_evidence(parcel_id,source,source_url,result,details)
       values(r.parcel_id,screen.source,screen.endpoint,outcome,details);
     end loop;
+    if lower(r.county)='osceola' then
+      details:=god_mode_ops.osceola_road_network_check(r.parcel_id);
+      insert into god_mode_ops.gis_worker_evidence(parcel_id,source,source_url,result,details)
+      values(r.parcel_id,'OSCEOLA_MAINTAINED_NETWORK',cfg->>'road_endpoint','UNVERIFIED',
+        details||jsonb_build_object('worker','county_queue_v1'));
+    end if;
     if cfg->>'row_endpoint' is not null then
       query := jsonb_build_object('geometry',geometry::text,'geometryType','esriGeometryPolygon',
         'inSR','4326','outSR','4326','spatialRel','esriSpatialRelIntersects','distance','3',

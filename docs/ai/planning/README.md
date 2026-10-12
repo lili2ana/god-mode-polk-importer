@@ -7,5 +7,12 @@
 - Verified: app DD bridge and synthetic lead creation/deduplication with rollback.
 - Verified: combined worker invoked by cron; temporary test job removed.
 - Blocked: exact recorded frontage/legal access; clerk denial/reCAPTCHA and review.
-- Blocked: Osceola service certificate chain; two independent clients failed.
-- Missing source evidence: current Lee/Charlotte seller distress and rough comps.
+- Verified: Osceola replacement transport and full-polygon road overlay.
+- Blocked: Osceola current pavement/maintained-ROW source proof.
+- Verified: Lee rough comps.
+- Missing source evidence: current Lee/Charlotte seller distress.
+
+- Verified: FTPS/HTTPS document adapters and local upload/PDF extraction tests.
+- Verified: canonical distress schema and fail-closed SQL thresholds deployed.
+- Blocked: authenticated Clerk FTP retrieval and live ATTOM provider verification;
+  their credentials are absent from this execution runtime.

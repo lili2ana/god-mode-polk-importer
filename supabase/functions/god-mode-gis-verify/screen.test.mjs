@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import {completeFeatures,parcelGeometry,screenQuery,runScreens} from './screen.mjs';
+for(const d of [{error:{}},{features:[],exceededTransferLimit:true},{}]) assert.throws(()=>completeFeatures(d));
+assert.throws(()=>parcelGeometry({features:[{attributes:{STRAP:'wrong'}}]},'target'));
+const g={rings:[[[0,0],[1,0],[1,1],[0,0]]]};
+const u=new URL(screenQuery('https://example.org/query','SURFACE',g,true));
+assert.equal(u.searchParams.get('geometryType'),'esriGeometryPolygon');
+assert.equal(u.searchParams.get('distance'),'30');
+let saved=[];
+const result=await runScreens(g,async()=>new Response(JSON.stringify({features:[{attributes:{SURFACE:'PAVED'}}]})),async(...args)=>saved.push(args));
+assert.equal(result.length,3);
+assert.equal(saved[2][3].paved_candidate_count,1);
+assert.equal(saved[2][3].legal_access_verified,false);
+await assert.rejects(runScreens(g,async()=>new Response('{"features":[]}'),async()=>{throw Error('write failed')}));
+const errors=await runScreens(g,async()=>{throw Error('network')},async()=>{});
+assert.ok(errors.every(r=>r.result==='ERROR'));
+console.log('GIS regression checks passed');

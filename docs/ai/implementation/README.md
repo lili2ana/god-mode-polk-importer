@@ -20,3 +20,10 @@ roads and the JPA maintenance layer, retaining pavement/ROW review. County GIS
 queue records this overlay for future Osceola candidates. The GitHub manual
 workflow is committed for credentialed runs; it is not a newly enabled daily
 remote intake worker. Database cron continues its existing daily qualification.
+
+ATTOM transport handles documented SuccessWithoutResult separately from HTTP
+failures, retries a supplied official address only after no match, and binds any
+result to normalized APN/FIPS. Source empty foreclosure objects are filtered by
+presence of instrument, recording date or distress type. Neither no-match nor
+empty adverse records qualify distress. Integration-branch workflow push now
+runs the masked live ATTOM check; DB stage requires the project CA certificate.

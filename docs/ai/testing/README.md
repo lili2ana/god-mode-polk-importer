@@ -37,3 +37,16 @@ stored as REVIEW_REQUIRED, leaving zero synthetic distress records. Anonymous
 intake execution and authenticated table reads both returned false. Advisors
 reported expected private-table RLS/no-policy information and the pre-existing
 unrelated Auth password-protection warning; no public grants were added.
+
+October 13 ATTOM fix: 14 local and GitHub runner tests pass. Live run
+38348728722 completed successfully. HTTP 400 / SuccessWithoutResult is now a
+valid no-match response; authentication and other errors remain errors. Address
+fallback matched the Lehigh parcel and county, but returned zero nonempty adverse
+records. Empty foreclosure objects no longer count as evidence. Foreclosure
+entitlement remains unverified without a known positive record.
+
+The first credentialed runner connection to the Supabase pooler failed certificate
+verification. Final run explicitly skips DB persistence without SUPABASE_DB_CA_CERT;
+it does not downgrade TLS or claim a qualification rerun. Download the project
+root CA from Database settings and supply the certificate before credentialed
+persistence. FTP request W114375-101226 remains pending.

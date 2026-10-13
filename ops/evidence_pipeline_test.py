@@ -21,6 +21,9 @@ class AttomResponseTests(unittest.TestCase):
  def test_success_without_result_is_a_hold_not_a_connection_error(self):
   d=p.normalize_attom({'status':{'code':400,'msg':'SuccessWithoutResult'},'property':[]},'P','Lee')
   self.assertEqual(d['verification_status'],'NO_PROPERTY_MATCH');self.assertFalse(d['qualifying_distress'])
+ def test_empty_foreclosure_section_is_not_an_adverse_record(self):
+  response={'property':[{'identifier':{'apn':'P','fips':'12071'},'foreclosure':{'documentNumber':None,'recordingDate':None,'distressType':None}}]}
+  self.assertEqual(p.normalize_attom(response,'P','Lee')['foreclosure_records'],[])
  def test_authentication_failure_is_not_absence(self):
   with self.assertRaises(ValueError):p.normalize_attom({'status':{'code':401,'msg':'InvalidApiKey'},'property':[]},'P','Lee')
  def test_400_no_result_allows_address_fallback(self):

@@ -68,9 +68,14 @@ jobs:
               result=fetch_attom('334426L3030160020','Lee',address='1102 FLOYD AVE S, LEHIGH ACRES, FL 33976')
               print(json.dumps({'transport_status':'REQUEST_COMPLETED','lookup_method':result['lookup_method'],
                   'parcel_result':result['verification_status'],'foreclosure_records_returned':len(result['foreclosure_records']),
+                  'adverse_record_fields':[{'document_present':bool(r.get('documentNumber')),'date_present':bool(r.get('recordingDate')),'type_present':bool(r.get('distressType'))} for r in result['foreclosure_records']],
                   'foreclosure_entitlement':'UNVERIFIED without known positive foreclosure record'}))
           except ValueError as error:
               print(json.dumps({'transport_status':'REQUEST_FAILED','category':str(error)}));raise SystemExit(1)
           PY
+      - name: Report missing database CA certificate
+        if: ${{ env.SUPABASE_DB_CA_CERT == '' }}
+        run: echo 'ATTOM check completed. Database persistence is pending the Supabase root CA certificate; no qualification hold was cleared.'
       - name: Fetch distress candidates and re-evaluate target holds
+        if: ${{ env.SUPABASE_DB_CA_CERT != '' }}
         run: python ops/evidence_pipeline.py queue

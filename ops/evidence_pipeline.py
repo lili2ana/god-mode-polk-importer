@@ -42,7 +42,7 @@ def normalize_attom(response,parcel,county):
     no_match=not props and response.get('status',{}).get('msg')=='SuccessWithoutResult' and response.get('status',{}).get('code') in (400,1)
     if (not props and not no_match) or any(norm(x.get('identifier',{}).get('apn',''))!=norm(parcel) or str(x.get('identifier',{}).get('fips',''))!=FIPS.get(county.lower()) for x in props):
         raise ValueError('ATTOM parcel/county identity mismatch or missing records')
-    records=[x['foreclosure'] for x in props if x.get('foreclosure')]
+    records=[x['foreclosure'] for x in props if isinstance(x.get('foreclosure'),dict) and any(x['foreclosure'].get(k) for k in ('documentNumber','recordingDate','distressType'))]
     return {'schema_version':1,'parcel_id':parcel,'county':county,'source_name':'ATTOM',
         'source_url':'https://api.gateway.attomdata.com/propertyapi/v1.0.0/saleshistory/expandedhistory',
         'checked_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),

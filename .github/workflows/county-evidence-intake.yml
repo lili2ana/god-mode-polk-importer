@@ -61,29 +61,16 @@ jobs:
       - name: Check ATTOM response without logging credentials or property data
         run: |
           python - <<'PY'
-          import os,json,ssl,urllib.request,urllib.error
-          key=os.environ.get('ATTOM_API_KEY')
-          if not key:raise SystemExit('ATTOM_API_KEY is missing')
-          url='https://api.gateway.attomdata.com/propertyapi/v1.0.0/saleshistory/expandedhistory?fips=12071&APN=334426L3030160020'
-          request=urllib.request.Request(url,headers={'Accept':'application/json','apikey':key})
+          import sys,json
+          sys.path.insert(0,'ops')
+          from evidence_pipeline import fetch_attom
           try:
-              with urllib.request.urlopen(request,timeout=30,context=ssl.create_default_context()) as response:
-                  data=response.read(10*1024*1024+1);status=response.status
-              if len(data)>10*1024*1024:raise SystemExit('ATTOM response exceeds size limit')
-              body=json.loads(data);properties=body.get('property',[])
-              print(json.dumps({'http_status':status,'properties_returned':len(properties),
-                  'foreclosure_records_returned':sum(bool(p.get('foreclosure')) for p in properties),
-                  'foreclosure_entitlement':'Not established by a successful HTTP response alone'}))
-          except urllib.error.HTTPError as error:
-              raw=error.read(65536)
-              try:
-                  details=json.loads(raw).get('status',{})
-                  message=str(details.get('msg','')).replace(key,'[REDACTED]')[:200]
-                  code=details.get('code')
-              except (ValueError,AttributeError):message='Non-JSON provider error';code=None
-              print(json.dumps({'http_status':error.code,'status':'ATTOM_REQUEST_REJECTED','provider_code':code,'provider_message':message}));raise SystemExit(1)
-          except (urllib.error.URLError,TimeoutError,ValueError):
-              raise SystemExit('ATTOM transport or JSON failure')
+              result=fetch_attom('334426L3030160020','Lee',address='1102 FLOYD AVE S, LEHIGH ACRES, FL 33976')
+              print(json.dumps({'transport_status':'REQUEST_COMPLETED','lookup_method':result['lookup_method'],
+                  'parcel_result':result['verification_status'],'foreclosure_records_returned':len(result['foreclosure_records']),
+                  'foreclosure_entitlement':'UNVERIFIED without known positive foreclosure record'}))
+          except ValueError as error:
+              print(json.dumps({'transport_status':'REQUEST_FAILED','category':str(error)}));raise SystemExit(1)
           PY
       - name: Fetch distress candidates and re-evaluate target holds
         run: python ops/evidence_pipeline.py queue

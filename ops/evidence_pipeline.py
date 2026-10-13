@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler,HTTPServer
 from pathlib import Path,PurePosixPath
 from urllib.parse import urlparse,urlencode
 from urllib.request import Request,urlopen
+from urllib.error import HTTPError
 MAX_PDF=50*1024*1024
 FIPS={'lee':'12071','charlotte':'12015','osceola':'12097'}
 def validate_remote_path(path):
@@ -38,26 +39,39 @@ def normalize_document(data):
 
 def normalize_attom(response,parcel,county):
     props=response.get('property',[]);norm=lambda x:re.sub('[^A-Z0-9]','',str(x).upper())
-    if not props or any(norm(x.get('identifier',{}).get('apn',''))!=norm(parcel) or str(x.get('identifier',{}).get('fips',''))!=FIPS.get(county.lower()) for x in props):
+    no_match=not props and response.get('status',{}).get('msg')=='SuccessWithoutResult' and response.get('status',{}).get('code') in (400,1)
+    if (not props and not no_match) or any(norm(x.get('identifier',{}).get('apn',''))!=norm(parcel) or str(x.get('identifier',{}).get('fips',''))!=FIPS.get(county.lower()) for x in props):
         raise ValueError('ATTOM parcel/county identity mismatch or missing records')
     records=[x['foreclosure'] for x in props if x.get('foreclosure')]
     return {'schema_version':1,'parcel_id':parcel,'county':county,'source_name':'ATTOM',
         'source_url':'https://api.gateway.attomdata.com/propertyapi/v1.0.0/saleshistory/expandedhistory',
         'checked_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
         'record_sha256':hashlib.sha256(json.dumps(response,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
-        'verification_status':'REVIEW_REQUIRED' if records else 'NO_ADVERSE_RECORD_RETURNED',
+        'verification_status':'NO_PROPERTY_MATCH' if no_match else ('REVIEW_REQUIRED' if records else 'NO_ADVERSE_RECORD_RETURNED'),
         'qualifying_distress':False,'release_search_complete':False,'foreclosure_records':records,'raw':response}
 
-def fetch_attom(parcel,county):
+def fetch_attom(parcel,county,address=None):
     key=os.environ.get('ATTOM_API_KEY')
     if not key:raise ValueError('ATTOM_API_KEY is not configured')
-    url='https://api.gateway.attomdata.com/propertyapi/v1.0.0/saleshistory/expandedhistory?'+urlencode({'fips':FIPS[county.lower()],'APN':parcel})
-    # Key header, never URL/log output; bounded response, verified TLS.
-    req=Request(url,headers={'Accept':'application/json','apikey':key})
-    with urlopen(req,timeout=30,context=ssl.create_default_context()) as r:
-        data=r.read(10*1024*1024+1)
-    if len(data)>10*1024*1024:raise ValueError('Provider response too large')
-    return normalize_attom(json.loads(data),parcel,county)
+    base='https://api.gateway.attomdata.com/propertyapi/v1.0.0/saleshistory/expandedhistory'
+    queries=[{'fips':FIPS[county.lower()],'APN':parcel}]
+    if address:queries.append({'address':address})
+    for query in queries:
+        req=Request(base+'?'+urlencode(query),headers={'Accept':'application/json','apikey':key})
+        try:
+            with urlopen(req,timeout=30,context=ssl.create_default_context()) as r:data=r.read(10*1024*1024+1)
+        except HTTPError as error:
+            data=error.read(10*1024*1024+1)
+            if len(data)>10*1024*1024:raise ValueError('Provider response too large') from None
+            try:body=json.loads(data)
+            except ValueError:raise ValueError('ATTOM HTTP failure '+str(error.code)) from None
+            if error.code!=400 or body.get('status',{}).get('msg')!='SuccessWithoutResult':
+                raise ValueError('ATTOM HTTP failure '+str(error.code)) from None
+        if len(data)>10*1024*1024:raise ValueError('Provider response too large')
+        result=normalize_attom(json.loads(data),parcel,county)
+        result['lookup_method']='address' if 'address' in query else 'fips_apn'
+        if result['verification_status']!='NO_PROPERTY_MATCH':return result
+    return result
 
 def download_ftps(remote_path):
     path=validate_remote_path(remote_path)
@@ -144,11 +158,11 @@ def main():
         if not os.environ.get('GOD_MODE_DATABASE_URL'):p.error('GOD_MODE_DATABASE_URL is required')
         import psycopg
         with psycopg.connect(os.environ['GOD_MODE_DATABASE_URL'],sslmode='verify-full',sslrootcert=os.environ.get('PGSSLROOTCERT','system'),connect_timeout=10) as conn:
-            rows=conn.execute("select parcel_id,county from god_mode_ops.buyer_demand_land_screening where screening_status='PENDING_FLOOD_WETLAND_ROAD_DISTRESS' and lower(city) in ('lehigh acres','port charlotte') and lower(county) in ('lee','charlotte') order by parcel_id limit 25").fetchall()
+            rows=conn.execute("select parcel_id,county,site_address,city from god_mode_ops.buyer_demand_land_screening where screening_status='PENDING_FLOOD_WETLAND_ROAD_DISTRESS' and lower(city) in ('lehigh acres','port charlotte') and lower(county) in ('lee','charlotte') order by parcel_id limit 25").fetchall()
         failed=0
         if os.environ.get('ATTOM_API_KEY'):
-            for parcel,county in rows:
-                try:stage_database('distress',fetch_attom(parcel,county))
+            for parcel,county,address,city in rows:
+                try:stage_database('distress',fetch_attom(parcel,county,address=f'{address}, {city}, FL' if address else None))
                 except Exception:failed+=1;print(json.dumps({'parcel_id':parcel,'status':'DISTRESS_FETCH_BLOCKED'}))
         else:print(json.dumps({'distress_status':'MISSING_ATTOM_API_KEY','active_hold_count':len(rows)}))
         with psycopg.connect(os.environ['GOD_MODE_DATABASE_URL'],sslmode='verify-full',sslrootcert=os.environ.get('PGSSLROOTCERT','system'),connect_timeout=10) as conn:

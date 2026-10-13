@@ -17,6 +17,29 @@ class PipelineTests(unittest.TestCase):
   d=p.normalize_attom({'property':[{'identifier':{'apn':'P','fips':'12071'}}]},'P','Lee')
   self.assertEqual(d['verification_status'],'NO_ADVERSE_RECORD_RETURNED');self.assertFalse(d['qualifying_distress'])
 
+class AttomResponseTests(unittest.TestCase):
+ def test_success_without_result_is_a_hold_not_a_connection_error(self):
+  d=p.normalize_attom({'status':{'code':400,'msg':'SuccessWithoutResult'},'property':[]},'P','Lee')
+  self.assertEqual(d['verification_status'],'NO_PROPERTY_MATCH');self.assertFalse(d['qualifying_distress'])
+ def test_authentication_failure_is_not_absence(self):
+  with self.assertRaises(ValueError):p.normalize_attom({'status':{'code':401,'msg':'InvalidApiKey'},'property':[]},'P','Lee')
+ def test_400_no_result_allows_address_fallback(self):
+  from unittest.mock import patch
+  from urllib.error import HTTPError
+  import io
+  from urllib.parse import parse_qs,urlparse
+  no_result=HTTPError('https://example.org',400,'bad',{},io.BytesIO(b'{"status":{"code":400,"msg":"SuccessWithoutResult"},"property":[]}'))
+  response={'property':[{'identifier':{'apn':'P','fips':'12071'}}]}
+  class Reply:
+   def __enter__(self):return self
+   def __exit__(self,*args):pass
+   def read(self,*args):return json.dumps(response).encode()
+  with patch.dict('os.environ',{'ATTOM_API_KEY':'test-key'}),patch.object(p,'urlopen',side_effect=[no_result,Reply()]) as request:
+   d=p.fetch_attom('P','Lee',address='1102 FLOYD AVE S, LEHIGH ACRES, FL')
+   self.assertEqual(d['verification_status'],'NO_ADVERSE_RECORD_RETURNED')
+   self.assertEqual(parse_qs(urlparse(request.call_args[0][0].full_url).query)['address'],['1102 FLOYD AVE S, LEHIGH ACRES, FL'])
+   self.assertNotIn('test-key',request.call_args[0][0].full_url)
+
 class UploadEndpointTests(unittest.TestCase):
  def test_loopback_endpoint_auth_and_pdf_extraction(self):
   import os,subprocess,sys,socket,urllib.request,urllib.error

@@ -50,3 +50,15 @@ verification. Final run explicitly skips DB persistence without SUPABASE_DB_CA_C
 it does not downgrade TLS or claim a qualification rerun. Download the project
 root CA from Database settings and supply the certificate before credentialed
 persistence. FTP request W114375-101226 remains pending.
+
+October 14 certificate follow-up: user-supplied Supabase Root 2021 CA validates
+as a self-signed CA, expires April 26, 2031, SHA256 fingerprint
+807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa.
+Bundled public trust anchor is used by the workflow (optional supplied CA secret
+can override). TLS verify-full remains enabled. Live GitHub run 38524764537
+passed 14 tests, ATTOM request, candidate persistence and full county automation.
+Provider failures 0; GIS processed 1, market refreshed 1, qualification evaluated
+1/qualified 0, DD synced 2, leads/outreach 0. October 14 06:52 UTC database readback
+shows ATTOM address lookup saved with 0 adverse records and Lehigh HOLD for
+recorded access/frontage and seller distress. Certificate transport blocker is
+resolved; real foreclosure entitlement positive control remains unproved.

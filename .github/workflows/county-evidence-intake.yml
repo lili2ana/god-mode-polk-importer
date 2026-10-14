@@ -36,14 +36,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y poppler-utils tesseract-ocr
           pip install -r ops/requirements-evidence.txt
-      - name: Configure optional database root certificate
+      - name: Configure database root certificate
         run: |
           python - <<'PY'
           import os,pathlib
           cert=os.environ.get('SUPABASE_DB_CA_CERT')
+          path=pathlib.Path('ops/certs/supabase-prod-ca-2021.crt').resolve()
           if cert:
               path=pathlib.Path(os.environ['RUNNER_TEMP'])/'database-root.crt';path.write_text(cert)
-              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(path)+'\n')
+          if not path.is_file():raise SystemExit('Database root CA is missing')
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(path)+'\n')
           PY
       - name: Test intake and schema behavior
         run: python -m unittest discover -s ops -p '*_test.py'
@@ -73,9 +75,5 @@ jobs:
           except ValueError as error:
               print(json.dumps({'transport_status':'REQUEST_FAILED','category':str(error)}));raise SystemExit(1)
           PY
-      - name: Report missing database CA certificate
-        if: ${{ env.SUPABASE_DB_CA_CERT == '' }}
-        run: echo 'ATTOM check completed. Database persistence is pending the Supabase root CA certificate; no qualification hold was cleared.'
       - name: Fetch distress candidates and re-evaluate target holds
-        if: ${{ env.SUPABASE_DB_CA_CERT != '' }}
         run: python ops/evidence_pipeline.py queue

@@ -5,6 +5,7 @@ on:
     branches: [integration/lee-polygon-screening]
     paths:
       - 'run_six_parcel_acceptance.py'
+      - 'run_charlotte_acceptance.py'
       - '.github/workflows/unified-six-parcel-acceptance.yml'
 permissions:
   contents: read

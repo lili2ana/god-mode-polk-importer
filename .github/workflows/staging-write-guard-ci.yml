@@ -1,0 +1,72 @@
+name: Ephemeral Supabase write guard CI
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/staging-write-guard-ci.yml'
+      - 'tests/write_guard_test.ts'
+      - 'supabase/functions/_shared/write_guard.ts'
+permissions:
+  contents: read
+jobs:
+  ephemeral-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ALLOW_DB_WRITES: 'false'
+      ALLOW_SELLER_OUTREACH: 'false'
+      SUPABASE_ACCESS_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Start ephemeral local Supabase
+        run: supabase start
+      - name: Native Deno mock tests
+        run: deno test --no-check tests/write_guard_test.ts supabase/functions/_shared/write_guard_test.ts
+      - name: Start guarded local Edge Function fixture
+        run: |
+          mkdir -p supabase/functions/write-guard-ci-fixture
+          cat > supabase/functions/write-guard-ci-fixture/index.ts <<'TS'
+          import { assertDbWritesAuthorized, WriteAuthorizationDenied } from "../_shared/write_guard.ts";
+          Deno.serve(async (request) => {
+            if (request.method !== "POST") return new Response("Method Not Allowed", {status:405});
+            try {
+              assertDbWritesAuthorized();
+              return Response.json({ok:true}, {status:200});
+            } catch (error) {
+              if (error instanceof WriteAuthorizationDenied) return Response.json({error:error.code}, {status:403});
+              return Response.json({error:"internal_error"}, {status:500});
+            }
+          });
+          TS
+          supabase functions serve write-guard-ci-fixture --no-verify-jwt > /tmp/write-guard-fixture.log 2>&1 &
+          echo $! > /tmp/write-guard-fixture.pid
+      - name: Negative-path HTTP endpoint probe
+        run: |
+          python3 - <<'PY'
+          import json, time, urllib.request, urllib.error
+          url = 'http://127.0.0.1:54321/functions/v1/write-guard-ci-fixture'
+          for attempt in range(40):
+              try:
+                  req = urllib.request.Request(url, data=b'{}', headers={'Content-Type':'application/json'}, method='POST')
+                  urllib.request.urlopen(req, timeout=2)
+              except urllib.error.HTTPError as e:
+                  body = json.loads(e.read().decode())
+                  assert e.code == 403 and body.get('error') == 'DB_WRITES_DISABLED', (e.code, body)
+                  print('PASS: fixture HTTP 403 DB_WRITES_DISABLED; no database client instantiated')
+                  break
+              except Exception:
+                  time.sleep(2)
+          else:
+              raise SystemExit('FAIL: fixture did not reject within startup window')
+          PY
+      - name: Stop ephemeral stack
+        if: always()
+        run: |
+          if test -f /tmp/write-guard-fixture.pid; then kill "$(cat /tmp/write-guard-fixture.pid)" || true; fi
+          supabase stop --no-backup || true

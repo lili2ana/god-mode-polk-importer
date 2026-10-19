@@ -1,5 +1,6 @@
 """Read-only Charlotte account + legacy key discovery. Never authorizes writes."""
 import json,sys,requests
+from urllib.parse import urlencode
 from run_charlotte_acceptance import PARCEL,LAYERS,query,geom,PROJECT
 from shapely.ops import transform
 def fields(url):
@@ -12,7 +13,20 @@ def main():
  shared=sorted((set(rf)&set(vf))&{"SKEY","RKEY"})
  if not shared:raise AssertionError("No common SKEY/RKEY attributes across both layer definitions")
  if "ACCOUNT" not in pf:raise AssertionError("Missing ACCOUNT in parcel layer")
- roads=query(LAYERS["road"],where="1=1",resultRecordCount=100)
+ seed_params={"f":"json","where":"1=1","outFields":"OBJECTID,SKEY,RKEY,FULLNAME","returnGeometry":"true","outSR":4326,"resultRecordCount":10}
+ seed_url=LAYERS["road"]+"/query"
+ print("ROAD_SEED_REQUEST "+json.dumps({"url":seed_url+"?"+urlencode(seed_params),"params":seed_params}),flush=True)
+ response=requests.get(seed_url,params=seed_params,timeout=25)
+ try:
+  response.raise_for_status()
+  seed_data=response.json()
+  if "error" in seed_data:raise RuntimeError(str(seed_data["error"]))
+ except Exception as exc:
+  print("ROAD_SEED_FAILURE "+json.dumps({"url":response.url,"status":response.status_code,"body":response.text[:800],"error":str(exc)}),flush=True)
+  raise
+ roads=seed_data.get("features",[])
+ print("ROAD_SEED_OK "+json.dumps({"count":len(roads),"url":response.url}),flush=True)
+ if not roads:raise AssertionError("No Layer 113 road seeds returned")
  for road in roads:
   ra=road.get("attributes") or {}
   for key in shared:

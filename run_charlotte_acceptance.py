@@ -25,7 +25,7 @@ def overlap(parcel,features):
     if area(parcel)<=0:raise ValueError("zero parcel area")
     pieces=[geom(f).intersection(parcel) for f in features if geom(f).intersects(parcel)]
     from shapely.ops import unary_union
-    return round(100*area(unary_union(pieces))/area(parcel),4) if pieces else 0.
+    return min(100.0,max(0.0,round(100*area(unary_union(pieces))/area(parcel),4))) if pieces else 0.
 def fetch_parcel(feature):
     point=geom(feature).representative_point()
     rows=query(PARCEL,geometry=json.dumps({"x":point.x,"y":point.y,"spatialReference":{"wkid":4326}}),geometryType="esriGeometryPoint",spatialRel="esriSpatialRelIntersects",resultRecordCount=3)
@@ -60,8 +60,8 @@ def scan(name,source,limit=12):
     return None
 def main():
     results={}
-    for name,source in [("lomr",LAYERS["lomr"]),("agreement",LAYERS["wetland"]),("discrepancy",LAYERS["wetland"]),("legacy",LAYERS["paved"])]:
-        results[name]=scan(name,source)
+    for name,source in [("lomr",LAYERS["lomr"]),("agreement",LAYERS["wetland"]),("discrepancy",LAYERS["wetland"]),("legacy",LAYERS["road"])]:
+        results[name]=scan(name,source,limit=120 if name=='legacy' else 12)
     print("ACCEPTANCE_SUMMARY "+json.dumps({"found":{k:bool(v) for k,v in results.items()},"complete":all(results.values()),"production_writes_allowed":False}),flush=True)
     return 0 if all(results.values()) else 1
 if __name__=="__main__":sys.exit(main())

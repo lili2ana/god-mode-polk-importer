@@ -1,0 +1,34 @@
+name: God Mode Daily Lee-Charlotte Readiness
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/god-mode-daily.yml'
+      - 'check_judy_pipeline_readiness.py'
+      - 'supabase/migrations/002_create_judy_view.sql'
+permissions:
+  contents: read
+concurrency:
+  group: god-mode-lee-charlotte-readiness
+  cancel-in-progress: false
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Verify migration is present
+        run: |
+          test -s supabase/migrations/002_create_judy_view.sql
+          python -m compileall -q check_judy_pipeline_readiness.py
+      - name: Read-only Supabase integration gate
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python check_judy_pipeline_readiness.py
+# Intentionally no schedule, no write credentials, and no upserts until live
+# Lee/Charlotte ingestion and six-parcel dual-gate acceptance are verified.

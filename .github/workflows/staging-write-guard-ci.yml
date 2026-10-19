@@ -5,6 +5,10 @@ on:
     paths:
       - '.github/workflows/staging-write-guard-ci.yml'
       - 'tests/write_guard_test.ts'
+      - 'tests/critical_handlers_test.ts'
+      - 'supabase/functions/god-mode-dd-finalize/**'
+      - 'supabase/functions/god-mode-gis-verify/**'
+      - 'supabase/migrations/**'
       - 'supabase/functions/_shared/write_guard.ts'
 permissions:
   contents: read
@@ -27,7 +31,7 @@ jobs:
       - name: Start ephemeral local Supabase
         run: supabase start
       - name: Native Deno mock tests
-        run: deno test --no-check tests/write_guard_test.ts supabase/functions/_shared/write_guard_test.ts
+        run: deno test --no-check tests/write_guard_test.ts tests/critical_handlers_test.ts supabase/functions/_shared/write_guard_test.ts
       - name: Start guarded local Edge Function fixture
         run: |
           mkdir -p supabase/functions/write-guard-ci-fixture

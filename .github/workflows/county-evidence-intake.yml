@@ -2,7 +2,7 @@ name: County document and distress intake
 on:
   push:
     branches: [integration/lee-polygon-screening]
-    paths: ['.github/workflows/county-evidence-intake.yml']
+    paths: ['.github/workflows/county-evidence-intake.yml', 'run_charlotte_acceptance.py']
   workflow_dispatch:
     inputs:
       manifest_path:
@@ -77,3 +77,16 @@ jobs:
           PY
       - name: Fetch distress candidates and re-evaluate target holds
         run: python ops/evidence_pipeline.py queue
+
+  charlotte-spatial-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'requests>=2.32,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m compileall -q run_charlotte_acceptance.py
+      - name: Read-only live Charlotte spatial discovery
+        run: python -u run_charlotte_acceptance.py

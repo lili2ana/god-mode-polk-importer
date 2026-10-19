@@ -19,6 +19,13 @@ def by_id(layer,field,value):
     matches=query(layer,where=f"{field}='{escaped}'",resultRecordCount=3)
     if len(matches)!=1:raise AssertionError(f"Expected exactly one {field}={value}, found {len(matches)}")
     return matches[0]
+def envelope_query(layer,params,fields):
+    response=requests.get(layer+"/query",params={"f":"json","outSR":4326,"returnGeometry":"true","outFields":fields,**params},timeout=25)
+    response.raise_for_status()
+    data=response.json()
+    if "error" in data:raise RuntimeError(str(data["error"]))
+    return data.get("features",[])
+
 def verify_legacy_join(parcel):
     """Require actual county join keys AND shared boundary geometry, not proximity."""
     # Envelope retrieves nearby candidates; it does not establish legal frontage.
@@ -27,8 +34,8 @@ def verify_legacy_join(parcel):
     inverse=Transformer.from_crs("EPSG:26917","EPSG:4326",always_xy=True).transform
     minx,miny,maxx,maxy=transform(inverse,search_metric).bounds
     params={"geometry":f"{minx},{miny},{maxx},{maxy}","geometryType":"esriGeometryEnvelope","inSR":4326,"spatialRel":"esriSpatialRelIntersects","resultRecordCount":100}
-    roads=query(LAYERS["road"],outFields="OBJECTID,SKEY,RKEY,FULLNAME",**params)
-    pavement=query(LAYERS["paved"],outFields="OBJECTID,SKEY,RKEY,PAVED,DATE_PAVED",**params)
+    roads=envelope_query(LAYERS["road"],params,"OBJECTID,SKEY,RKEY,FULLNAME")
+    pavement=envelope_query(LAYERS["paved"],params,"OBJECTID,SKEY,RKEY,PAVED,DATE_PAVED")
     if not roads or not pavement:
         raise AssertionError("UNVERIFIED_LEGACY_JOIN: no road/pavement candidates within 20m envelope")
     boundary=transform(PROJECT,geom(parcel)).boundary

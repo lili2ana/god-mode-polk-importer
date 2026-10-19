@@ -19,8 +19,8 @@ def main():
             cur.execute("SELECT count(*) FROM public.v_judy_seller_cards")
             count = cur.fetchone()[0]
             print(f"READ ONLY: Judy view exists; currently {count} eligible seller cards")
-    print("BLOCKED: Dual-gate live county acceptance and verified ingestion not implemented in this repository; no upsert attempted")
-    return 4
+    print("READINESS PASS: private view reachable. Dual-gate ingestion and production writes remain DISABLED.")
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -61,8 +61,9 @@ def main():
    for pavement in paved:
     pg=transform(PROJECT,geom(pavement));rg=transform(PROJECT,geom(road))
     if pg.is_empty or rg.is_empty or not pg.is_valid or not rg.is_valid:continue
-    envelope=transform(inverse,rg.buffer(buffer_m))
-    parcel_params={"f":"json","geometry":json.dumps({"rings":[list(envelope.exterior.coords)],"spatialReference":{"wkid":4326}}),"geometryType":"esriGeometryPolygon","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,ACCOUNT,PKEY","returnGeometry":"true","outSR":4326,"resultRecordCount":100}
+    envelope=transform(inverse,rg.buffer(buffer_m)).envelope
+    minx,miny,maxx,maxy=envelope.bounds
+    parcel_params={"f":"json","geometry":f"{minx},{miny},{maxx},{maxy}","inSR":4326,"geometryType":"esriGeometryEnvelope","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,ACCOUNT,PKEY","returnGeometry":"true","outSR":4326,"resultRecordCount":100}
     candidates=diagnostic_query(PARCEL,parcel_params,"PARCEL_SPATIAL")
     for parcel in candidates:
      a=parcel.get("attributes") or {};pid=a.get("ACCOUNT")

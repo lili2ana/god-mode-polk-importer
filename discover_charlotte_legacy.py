@@ -5,11 +5,11 @@ from shapely.ops import transform
 def fields(url):
  r=requests.get(url,params={"f":"json"},timeout=25);r.raise_for_status();j=r.json()
  if "error" in j:raise RuntimeError(str(j["error"]))
- return {f["name"] for f in j["fields"]}
+ return {f["name"]:f["type"] for f in j["fields"]}
 def main():
  pf,rf,vf=(fields(x) for x in (PARCEL,LAYERS["road"],LAYERS["paved"]))
- print("LAYER_FIELDS "+json.dumps({"parcel":sorted(pf),"road":sorted(rf),"pavement":sorted(vf)}),flush=True)
- shared=sorted((rf&vf)&{"SKEY","RKEY"})
+ print("LAYER_FIELDS "+json.dumps({"parcel":pf,"road":rf,"pavement":vf}),flush=True)
+ shared=sorted((set(rf)&set(vf))&{"SKEY","RKEY"})
  if not shared:raise AssertionError("No common SKEY/RKEY attributes across both layer definitions")
  if "ACCOUNT" not in pf:raise AssertionError("Missing ACCOUNT in parcel layer")
  roads=query(LAYERS["road"],where="1=1",resultRecordCount=100)

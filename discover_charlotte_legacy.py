@@ -50,8 +50,9 @@ def main():
   for key in shared:
    val=ra.get(key)
    if val is None or str(val).strip()=="":continue
-   v=str(val).replace("'","''")
-   paved=query(LAYERS["paved"],where=f"{key}='{v}'",resultRecordCount=30)
+   where=key+"="+literal(val,vf[key])
+   pavement_params={"f":"json","where":where,"outFields":"OBJECTID,SKEY,RKEY,PAVED,DATE_PAVED","returnGeometry":"true","outSR":4326,"resultRecordCount":30}
+   paved=diagnostic_query(LAYERS["paved"],pavement_params,"PAVEMENT_LOOKUP")
    for pavement in paved:
     pg=transform(PROJECT,geom(pavement));rg=transform(PROJECT,geom(road))
     if pg.is_empty or rg.is_empty or not pg.is_valid or not rg.is_valid:continue

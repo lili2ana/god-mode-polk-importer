@@ -11,7 +11,7 @@ TARGETS=[
  ("charlotte_lomr","422631100002"),
  ("charlotte_wetlands_agreement","422336100001"),
  ("charlotte_wetlands_discrepancy","422120100001"),
- ("charlotte_legacy_pavement","422120200001"),
+ ("charlotte_legacy_pavement","402301101001"),
 ]
 def by_id(layer,field,value):
     escaped=str(value).replace("'","''")

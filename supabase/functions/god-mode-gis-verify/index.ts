@@ -1,7 +1,12 @@
+import { assertDbWritesAuthorized, WriteAuthorizationDenied } from "../_shared/write_guard.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.0";
 import { parcelSource as source, parcelGeometry, runScreens } from "./screen.mjs";
 const respond=(v:unknown,s=200)=>new Response(JSON.stringify(v),{status:s,headers:{"content-type":"application/json"}});
-Deno.serve(async(req)=>{
+export async function handleRequest(req: Request, getEnv: (name: string) => string | undefined = (name) => Deno.env.get(name)): Promise<Response> {
+ if(req.method==="POST") {
+  try { assertDbWritesAuthorized(getEnv); }
+  catch(error) { if(error instanceof WriteAuthorizationDenied) return respond({error:error.code},403); throw error; }
+ }
  if(req.method!=="POST")return respond({error:"POST required"},405);
  const url=Deno.env.get("SUPABASE_URL"),key=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
  if(!url||!key)return respond({error:"server configuration missing"},503);
@@ -40,4 +45,6 @@ Deno.serve(async(req)=>{
  });
  return respond({parcel_id:parcel,checks,geometry_status:result,evidence_saved:true,qualification_status:"HOLD_PENDING_EXTERNAL_EVIDENCE",details});
  }catch(e){return respond({parcel_id:parcel,error:"GIS retrieval failed",detail:String(e),qualification_status:"HOLD"},502)}
-});
+}
+
+if (import.meta.main) Deno.serve(handleRequest);

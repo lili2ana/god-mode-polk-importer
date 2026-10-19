@@ -55,6 +55,8 @@ def scan(name,source,limit=12):
             print(json.dumps(result),flush=True)
             good={"lomr":pct["lomr"]>0,"agreement":bool(wet and nwi) and discrepancy<10,"discrepancy":discrepancy>=10,"legacy":bool(roads) and "PAVEMENT_UNVERIFIED" in flags}[name]
             if good:return result
+        except requests.HTTPError:
+            raise  # fail closed on broken county endpoints, never silently skip
         except Exception as exc:
             print(json.dumps({"scenario":name,"candidate_error":str(exc)[:180]}),flush=True)
     return None

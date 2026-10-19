@@ -1,5 +1,7 @@
 """Unified six-parcel, fail-closed GIS acceptance. Read-only; no seller release."""
 import json,sys
+from shapely.ops import transform
+from run_charlotte_acceptance import PROJECT
 import requests
 from run_charlotte_acceptance import PARCEL,LAYERS,NWI,query,geom,intersect,overlap
 LEE="https://gismapserver.leegov.com/gisserver910/rest/services/Layers/ParcelAddress/MapServer/0"
@@ -16,6 +18,35 @@ def by_id(layer,field,value):
     matches=query(layer,where=f"{field}='{escaped}'",resultRecordCount=3)
     if len(matches)!=1:raise AssertionError(f"Expected exactly one {field}={value}, found {len(matches)}")
     return matches[0]
+def verify_legacy_join(parcel):
+    """Require actual county join keys AND shared boundary geometry, not proximity."""
+    roads=intersect(LAYERS["road"],parcel)
+    pavement=intersect(LAYERS["paved"],parcel)
+    if not roads or not pavement:
+        raise AssertionError("UNVERIFIED_LEGACY_JOIN: no road/pavement candidates")
+    boundary=transform(PROJECT,geom(parcel)).boundary
+    if not boundary.is_valid or boundary.is_empty:
+        raise AssertionError("UNVERIFIED_LEGACY_JOIN: invalid parcel boundary")
+    for road in roads:
+        ra=road.get("attributes") or {}
+        for paved in pavement:
+            pa=paved.get("attributes") or {}
+            shared=[]
+            for key in ("SKEY","RKEY"):
+                rv=ra.get(key);pv=pa.get(key)
+                if rv is not None and pv is not None and str(rv).strip() and str(rv)==str(pv):
+                    shared.append(key)
+            if not shared:continue
+            road_geom=transform(PROJECT,geom(road))
+            paved_geom=transform(PROJECT,geom(paved))
+            if road_geom.is_empty or paved_geom.is_empty or not road_geom.is_valid or not paved_geom.is_valid:
+                raise AssertionError("UNVERIFIED_LEGACY_JOIN: invalid centerline geometry")
+            # Projected feet/metres: EPSG:26917 uses metres. No distance-only shortcut.
+            contact=boundary.intersection(road_geom)
+            if contact.is_empty or contact.length<=0:continue
+            if boundary.intersection(paved_geom).is_empty:continue
+            return {"join_keys":shared,"boundary_contact_m":round(contact.length,3),"road_attributes":{k:ra.get(k) for k in ("SKEY","RKEY")},"pavement_attributes":{k:pa.get(k) for k in ("SKEY","RKEY")}}
+    raise AssertionError("UNVERIFIED_LEGACY_JOIN: no matching SKEY/RKEY with measurable shared parcel boundary")
 def assess_charlotte(scenario,pid):
     p=by_id(PARCEL,"ACCOUNT",pid)
     g=geom(p)
@@ -34,7 +65,8 @@ def assess_charlotte(scenario,pid):
       "charlotte_wetlands_discrepancy":difference>=10,
     }
     if scenario=="charlotte_legacy_pavement":
-        raise AssertionError("UNVERIFIED_LEGACY_JOIN: account exists but SKEY/RKEY and boundary adjacency are not proven")
+        join=verify_legacy_join(p)
+        return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"legacy_join":join,"assertions_passed":True}
     if not checks[scenario]:raise AssertionError(f"Scenario assertion failed: {scenario}")
     return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"assertions_passed":True}
 def assess_lee(pid):

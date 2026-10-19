@@ -3,6 +3,8 @@ import json,sys,requests
 from urllib.parse import urlencode
 from run_charlotte_acceptance import PARCEL,LAYERS,query,geom,PROJECT
 from shapely.ops import transform
+from shapely.geometry import mapping
+from pyproj import Transformer
 def fields(url):
  r=requests.get(url,params={"f":"json"},timeout=25);r.raise_for_status();j=r.json()
  if "error" in j:raise RuntimeError(str(j["error"]))
@@ -31,7 +33,7 @@ def main():
  shared=sorted((set(rf)&set(vf))&{"SKEY","RKEY"})
  if not shared:raise AssertionError("No common SKEY/RKEY attributes across both layer definitions")
  if "ACCOUNT" not in pf:raise AssertionError("Missing ACCOUNT in parcel layer")
- seed_params={"f":"json","where":"1=1","outFields":"OBJECTID,SKEY,RKEY,FULLNAME","returnGeometry":"true","outSR":4326,"resultRecordCount":10}
+ seed_params={"f":"json","where":"1=1","outFields":"OBJECTID,SKEY,RKEY,FULLNAME","returnGeometry":"true","outSR":4326,"resultRecordCount":60}
  seed_url=LAYERS["road"]+"/query"
  print("ROAD_SEED_REQUEST "+json.dumps({"url":seed_url+"?"+urlencode(seed_params),"params":seed_params}),flush=True)
  response=requests.get(seed_url,params=seed_params,timeout=25)
@@ -45,6 +47,9 @@ def main():
  roads=seed_data.get("features",[])
  print("ROAD_SEED_OK "+json.dumps({"count":len(roads),"url":response.url}),flush=True)
  if not roads:raise AssertionError("No Layer 113 road seeds returned")
+ inverse=Transformer.from_crs(26917,4326,always_xy=True).transform
+ # Screening envelope only, not surveyed right-of-way or proof of legal access.
+ buffer_m=20
  for road in roads:
   ra=road.get("attributes") or {}
   for key in shared:
@@ -56,16 +61,18 @@ def main():
    for pavement in paved:
     pg=transform(PROJECT,geom(pavement));rg=transform(PROJECT,geom(road))
     if pg.is_empty or rg.is_empty or not pg.is_valid or not rg.is_valid:continue
-    parcel_params={"f":"json","geometry":json.dumps(dict(road["geometry"],spatialReference={"wkid":4326})),"geometryType":"esriGeometryPolyline","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,ACCOUNT,PKEY","returnGeometry":"true","outSR":4326,"resultRecordCount":100}
+    envelope=transform(inverse,rg.buffer(buffer_m))
+    parcel_params={"f":"json","geometry":json.dumps({"rings":[list(envelope.exterior.coords)],"spatialReference":{"wkid":4326}}),"geometryType":"esriGeometryPolygon","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,ACCOUNT,PKEY","returnGeometry":"true","outSR":4326,"resultRecordCount":100}
     candidates=diagnostic_query(PARCEL,parcel_params,"PARCEL_SPATIAL")
     for parcel in candidates:
      a=parcel.get("attributes") or {};pid=a.get("ACCOUNT")
      if not pid:continue
      g=transform(PROJECT,geom(parcel))
      if not g.is_valid or g.is_empty:continue
-     contact=g.boundary.intersection(rg)
-     if contact.length<=0 or g.boundary.intersection(pg).is_empty:continue
-     print("VERIFIED_LEGACY_CANDIDATE "+json.dumps({"account":str(pid),"key":key,"value":val,"boundary_contact_m":contact.length,"topology_ok":True}),flush=True)
+     contact=g.boundary.intersection(rg.buffer(buffer_m))
+     if contact.length<=0 or g.boundary.distance(rg)>buffer_m:continue
+     if g.boundary.distance(pg)>buffer_m:continue
+     print("BUFFER_ADJACENT_CANDIDATE "+json.dumps({"account":str(pid),"key":key,"value":val,"road_skey":ra.get("SKEY"),"road_rkey":ra.get("RKEY"),"pavement_skey":pavement.get("attributes",{}).get("SKEY"),"pavement_rkey":pavement.get("attributes",{}).get("RKEY"),"buffer_boundary_contact_m":round(contact.length,3),"centerline_distance_m":round(g.boundary.distance(rg),3),"buffer_m":buffer_m,"legal_access_verified":False,"right_of_way_verified":False}),flush=True)
      return 0
- raise AssertionError("No verified legacy candidate in first 100 centerline records; widen search without inventing ID")
+ raise AssertionError("No buffer-adjacent candidate in first 60 centerline records")
 if __name__=="__main__":sys.exit(main())

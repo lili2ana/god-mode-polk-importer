@@ -28,10 +28,10 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - name: Start ephemeral local Supabase
-        run: supabase start
       - name: Native Deno mock tests
         run: deno test --no-check tests/write_guard_test.ts tests/critical_handlers_test.ts supabase/functions/_shared/write_guard_test.ts
+      - name: Start ephemeral local Supabase
+        run: supabase start
       - name: Start guarded local Edge Function fixture
         run: |
           mkdir -p supabase/functions/write-guard-ci-fixture

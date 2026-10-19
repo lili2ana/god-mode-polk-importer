@@ -1,0 +1,23 @@
+name: Charlotte live spatial acceptance discovery
+on:
+  workflow_dispatch:
+  push:
+    branches: [integration/lee-polygon-screening]
+    paths:
+      - 'run_charlotte_acceptance.py'
+      - '.github/workflows/charlotte-live-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  spatial-discovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'requests>=2.32,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m compileall -q run_charlotte_acceptance.py
+      - name: Query live Charlotte GIS and USFWS NWI without database writes
+        run: python -u run_charlotte_acceptance.py

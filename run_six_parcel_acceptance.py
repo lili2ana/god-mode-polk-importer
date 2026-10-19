@@ -1,6 +1,7 @@
 """Unified six-parcel, fail-closed GIS acceptance. Read-only; no seller release."""
 import json,sys
 from shapely.ops import transform
+from pyproj import Transformer
 from run_charlotte_acceptance import PROJECT
 import requests
 from run_charlotte_acceptance import PARCEL,LAYERS,NWI,query,geom,intersect,overlap
@@ -20,10 +21,16 @@ def by_id(layer,field,value):
     return matches[0]
 def verify_legacy_join(parcel):
     """Require actual county join keys AND shared boundary geometry, not proximity."""
-    roads=intersect(LAYERS["road"],parcel)
-    pavement=intersect(LAYERS["paved"],parcel)
+    # Envelope retrieves nearby candidates; it does not establish legal frontage.
+    parcel_metric=transform(PROJECT,geom(parcel))
+    search_metric=parcel_metric.buffer(20).envelope
+    inverse=Transformer.from_crs("EPSG:26917","EPSG:4326",always_xy=True).transform
+    minx,miny,maxx,maxy=transform(inverse,search_metric).bounds
+    params={"geometry":f"{minx},{miny},{maxx},{maxy}","geometryType":"esriGeometryEnvelope","inSR":4326,"spatialRel":"esriSpatialRelIntersects","resultRecordCount":100}
+    roads=query(LAYERS["road"],outFields="OBJECTID,SKEY,RKEY,FULLNAME",**params)
+    pavement=query(LAYERS["paved"],outFields="OBJECTID,SKEY,RKEY,PAVED,DATE_PAVED",**params)
     if not roads or not pavement:
-        raise AssertionError("UNVERIFIED_LEGACY_JOIN: no road/pavement candidates")
+        raise AssertionError("UNVERIFIED_LEGACY_JOIN: no road/pavement candidates within 20m envelope")
     boundary=transform(PROJECT,geom(parcel)).boundary
     if not boundary.is_valid or boundary.is_empty:
         raise AssertionError("UNVERIFIED_LEGACY_JOIN: invalid parcel boundary")
@@ -37,6 +44,7 @@ def verify_legacy_join(parcel):
                 if rv is not None and pv is not None and str(rv).strip() and str(rv)==str(pv):
                     shared.append(key)
             if not shared:continue
+            if any(ra.get(k)!=pa.get(k) for k in ("SKEY","RKEY")):continue
             road_geom=transform(PROJECT,geom(road))
             paved_geom=transform(PROJECT,geom(paved))
             if road_geom.is_empty or paved_geom.is_empty or not road_geom.is_valid or not paved_geom.is_valid:
@@ -46,7 +54,7 @@ def verify_legacy_join(parcel):
             if contact.is_empty or contact.length<=0:continue
             if boundary.intersection(paved_geom).is_empty:continue
             return {"join_keys":shared,"boundary_contact_m":round(contact.length,3),"road_attributes":{k:ra.get(k) for k in ("SKEY","RKEY")},"pavement_attributes":{k:pa.get(k) for k in ("SKEY","RKEY")}}
-    raise AssertionError("UNVERIFIED_LEGACY_JOIN: no matching SKEY/RKEY with measurable shared parcel boundary")
+    raise AssertionError("UNVERIFIED_LEGACY_JOIN: nearby SKEY/RKEY records do not establish measurable shared boundary; authoritative ROW geometry required")
 def assess_charlotte(scenario,pid):
     p=by_id(PARCEL,"ACCOUNT",pid)
     g=geom(p)

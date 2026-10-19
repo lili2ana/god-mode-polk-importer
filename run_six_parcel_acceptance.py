@@ -9,7 +9,7 @@ TARGETS=[
  ("charlotte_lomr","422631100002"),
  ("charlotte_wetlands_agreement","422336100001"),
  ("charlotte_wetlands_discrepancy","422120100001"),
- ("charlotte_legacy_pavement",None),
+ ("charlotte_legacy_pavement","422120200001"),
 ]
 def by_id(layer,field,value):
     escaped=str(value).replace("'","''")
@@ -34,7 +34,7 @@ def assess_charlotte(scenario,pid):
       "charlotte_wetlands_discrepancy":difference>=10,
     }
     if scenario=="charlotte_legacy_pavement":
-        raise AssertionError("SKEY/RKEY field-level join and boundary adjacency evidence not yet implemented; refuse false pass")
+        raise AssertionError("UNVERIFIED_LEGACY_JOIN: account exists but SKEY/RKEY and boundary adjacency are not proven")
     if not checks[scenario]:raise AssertionError(f"Scenario assertion failed: {scenario}")
     return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"assertions_passed":True}
 def assess_lee(pid):

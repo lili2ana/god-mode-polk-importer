@@ -1,0 +1,24 @@
+name: Unified six parcel GIS acceptance
+on:
+  workflow_dispatch:
+  push:
+    branches: [integration/lee-polygon-screening]
+    paths:
+      - 'run_six_parcel_acceptance.py'
+      - 'run_charlotte_acceptance.py'
+      - '.github/workflows/unified-six-parcel-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  six-parcel-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'requests>=2.32,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m compileall -q run_six_parcel_acceptance.py
+      - name: Run all six parcels sequentially with fail-closed release gate
+        run: python -u run_six_parcel_acceptance.py

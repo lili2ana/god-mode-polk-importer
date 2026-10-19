@@ -1,0 +1,92 @@
+name: County document and distress intake
+on:
+  push:
+    branches: [integration/lee-polygon-screening]
+    paths: ['.github/workflows/county-evidence-intake.yml', 'run_charlotte_acceptance.py']
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Committed JSON document manifest (no secrets or signed URLs)
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: county-evidence-intake
+  cancel-in-progress: false
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GOD_MODE_DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+      ATTOM_API_KEY: ${{ secrets.ATTOM_API_KEY }}
+      LEE_FTP_HOST: ${{ secrets.LEE_FTP_HOST }}
+      LEE_FTP_USER: ${{ secrets.LEE_FTP_USER }}
+      LEE_FTP_PASSWORD: ${{ secrets.LEE_FTP_PASSWORD }}
+      DOCUMENT_PROVIDER_HOST: ${{ vars.DOCUMENT_PROVIDER_HOST }}
+      DOCUMENT_API_KEY: ${{ secrets.DOCUMENT_API_KEY }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y poppler-utils tesseract-ocr
+          pip install -r ops/requirements-evidence.txt
+      - name: Configure database root certificate
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT')
+          path=pathlib.Path('ops/certs/supabase-prod-ca-2021.crt').resolve()
+          if cert:
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'database-root.crt';path.write_text(cert)
+          if not path.is_file():raise SystemExit('Database root CA is missing')
+          with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(path)+'\n')
+          PY
+      - name: Test intake and schema behavior
+        run: python -m unittest discover -s ops -p '*_test.py'
+      - name: Download and extract selected documents
+        if: ${{ inputs.manifest_path != '' }}
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest_path }}
+        run: |
+          python - <<'PY'
+          import os,pathlib,subprocess,sys
+          root=pathlib.Path.cwd();p=(root/os.environ['MANIFEST_PATH']).resolve()
+          if not p.is_relative_to(root) or not p.is_file() or p.suffix!='.json':raise SystemExit('Invalid manifest path')
+          subprocess.run([sys.executable,'ops/evidence_pipeline.py','manifest','--manifest',str(p),'--inbox',os.environ['RUNNER_TEMP']+'/document-inbox'],check=True)
+          PY
+      - name: Check ATTOM response without logging credentials or property data
+        run: |
+          python - <<'PY'
+          import sys,json
+          sys.path.insert(0,'ops')
+          from evidence_pipeline import fetch_attom
+          try:
+              result=fetch_attom('334426L3030160020','Lee',address='1102 FLOYD AVE S, LEHIGH ACRES, FL 33976')
+              print(json.dumps({'transport_status':'REQUEST_COMPLETED','lookup_method':result['lookup_method'],
+                  'parcel_result':result['verification_status'],'foreclosure_records_returned':len(result['foreclosure_records']),
+                  'adverse_record_fields':[{'document_present':bool(r.get('documentNumber')),'date_present':bool(r.get('recordingDate')),'type_present':bool(r.get('distressType'))} for r in result['foreclosure_records']],
+                  'foreclosure_entitlement':'UNVERIFIED without known positive foreclosure record'}))
+          except ValueError as error:
+              print(json.dumps({'transport_status':'REQUEST_FAILED','category':str(error)}));raise SystemExit(1)
+          PY
+      - name: Fetch distress candidates and re-evaluate target holds
+        run: python ops/evidence_pipeline.py queue
+
+  charlotte-spatial-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'requests>=2.32,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m compileall -q run_charlotte_acceptance.py
+      - name: Read-only live Charlotte spatial discovery
+        run: python -u run_charlotte_acceptance.py

@@ -1,0 +1,19 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "title":"Verified current adverse-record evidence (backend-only)",
+ "type":"object",
+ "required":["parcel_id","county","current_owner","signal_type","verification_status","active","released","release_search_complete","checked_at","release_checked_at","event_date","source_url","source_record_id","record_sha256"],
+ "properties":{
+  "parcel_id":{"type":"string","minLength":1},"county":{"enum":["Lee","Charlotte","Osceola"]},
+  "current_owner":{"type":"string","minLength":1},
+  "signal_type":{"enum":["lis_pendens","notice_of_default","tax_certificate_delinquency"]},
+  "verification_status":{"enum":["REVIEW_REQUIRED","VERIFIED"]},
+  "active":{"type":"boolean"},"released":{"type":"boolean"},"release_search_complete":{"type":"boolean"},
+  "checked_at":{"type":"string","format":"date-time"},"release_checked_at":{"type":"string","format":"date-time"},
+  "event_date":{"type":"string","format":"date"},"delinquent_since":{"type":"string","format":"date"},
+  "amount_due":{"type":"number","exclusiveMinimum":0},"source_url":{"type":"string","pattern":"^https://"},
+  "source_record_id":{"type":"string","minLength":1},"record_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}
+ },
+ "allOf":[{"if":{"properties":{"signal_type":{"const":"tax_certificate_delinquency"}}},"then":{"required":["delinquent_since","amount_due"]}}],
+ "description":"Provider candidate intake always sets REVIEW_REQUIRED. Only trusted record/release verification may set VERIFIED. SQL enforces current identity, search freshness <=7 days, dated event and unresolved activity; tax delinquency must exceed 12 months."
+}

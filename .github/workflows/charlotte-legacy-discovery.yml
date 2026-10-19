@@ -1,0 +1,21 @@
+name: Charlotte legacy parcel discovery
+on:
+  workflow_dispatch:
+  push:
+    branches: [integration/lee-polygon-screening]
+    paths:
+      - 'discover_charlotte_legacy.py'
+      - '.github/workflows/charlotte-legacy-discovery.yml'
+permissions:
+  contents: read
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install 'requests>=2.32,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -u discover_charlotte_legacy.py

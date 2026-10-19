@@ -27,7 +27,7 @@ def envelope_query(layer,params,fields):
     return data.get("features",[])
 
 def verify_legacy_join(parcel):
-    """Require actual county join keys AND shared boundary geometry, not proximity."""
+    """Validate GIS corridor proximity only; legal ROW access remains unverified."""
     # Envelope retrieves nearby candidates; it does not establish legal frontage.
     parcel_metric=transform(PROJECT,geom(parcel))
     search_metric=parcel_metric.buffer(20).envelope
@@ -36,6 +36,8 @@ def verify_legacy_join(parcel):
     params={"geometry":f"{minx},{miny},{maxx},{maxy}","geometryType":"esriGeometryEnvelope","inSR":4326,"spatialRel":"esriSpatialRelIntersects","resultRecordCount":100}
     roads=envelope_query(LAYERS["road"],params,"OBJECTID,SKEY,RKEY,FULLNAME")
     pavement=envelope_query(LAYERS["paved"],params,"OBJECTID,SKEY,RKEY,PAVED,DATE_PAVED")
+    lots=envelope_query("https://agis3.charlottecountyfl.gov/arcgis/rest/services/Essentials/CCGISLayers/MapServer/24",params,"*")
+    if not lots:raise AssertionError("UNVERIFIED_LEGACY_JOIN: no Lots polygon corroboration")
     if not roads or not pavement:
         raise AssertionError("UNVERIFIED_LEGACY_JOIN: no road/pavement candidates within 20m envelope")
     boundary=transform(PROJECT,geom(parcel)).boundary
@@ -56,12 +58,19 @@ def verify_legacy_join(parcel):
             paved_geom=transform(PROJECT,geom(paved))
             if road_geom.is_empty or paved_geom.is_empty or not road_geom.is_valid or not paved_geom.is_valid:
                 raise AssertionError("UNVERIFIED_LEGACY_JOIN: invalid centerline geometry")
-            # Projected feet/metres: EPSG:26917 uses metres. No distance-only shortcut.
-            contact=boundary.intersection(road_geom)
-            if contact.is_empty or contact.length<=0:continue
-            if boundary.intersection(paved_geom).is_empty:continue
-            return {"join_keys":shared,"boundary_contact_m":round(contact.length,3),"road_attributes":{k:ra.get(k) for k in ("SKEY","RKEY")},"pavement_attributes":{k:pa.get(k) for k in ("SKEY","RKEY")}}
-    raise AssertionError("UNVERIFIED_LEGACY_JOIN: nearby SKEY/RKEY records do not establish measurable shared boundary; authoritative ROW geometry required")
+            # Screening only: proximity to a matched centerline is not legal ROW frontage.
+            distance=boundary.distance(road_geom)
+            if distance>20:continue
+            if boundary.distance(paved_geom)>20:continue
+            lot_contacts=[]
+            for lot in lots:
+                lg=transform(PROJECT,geom(lot))
+                if lg.is_empty or not lg.is_valid:continue
+                if lg.intersection(parcel_metric).area<=0:continue
+                lot_contacts.append(lg.boundary.distance(road_geom))
+            if not lot_contacts or min(lot_contacts)>20:continue
+            return {"join_keys":shared,"centerline_distance_m":round(distance,3),"lot_centerline_distance_m":round(min(lot_contacts),3),"road_attributes":{k:ra.get(k) for k in ("SKEY","RKEY")},"pavement_attributes":{k:pa.get(k) for k in ("SKEY","RKEY")},"scope":"GIS proximity screening only","legal_access_verified":False,"right_of_way_verified":False}
+    raise AssertionError("UNVERIFIED_LEGACY_JOIN: no corroborated Lots and road corridor proximity within 20m")
 def assess_charlotte(scenario,pid):
     p=by_id(PARCEL,"ACCOUNT",pid)
     g=geom(p)
@@ -81,7 +90,7 @@ def assess_charlotte(scenario,pid):
     }
     if scenario=="charlotte_legacy_pavement":
         join=verify_legacy_join(p)
-        return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"legacy_join":join,"assertions_passed":True}
+        return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"legacy_join":join,"release_authorized":False,"assertions_passed":True}
     if not checks[scenario]:raise AssertionError(f"Scenario assertion failed: {scenario}")
     return {"scenario":scenario,"parcel_id":pid,"topology_ok":True,"overlap_pct":overlaps,"flags":flags,"assertions_passed":True}
 def assess_lee(pid):

@@ -7,6 +7,24 @@ def fields(url):
  r=requests.get(url,params={"f":"json"},timeout=25);r.raise_for_status();j=r.json()
  if "error" in j:raise RuntimeError(str(j["error"]))
  return {f["name"]:f["type"] for f in j["fields"]}
+def diagnostic_query(layer,params,label):
+ url=layer+"/query"
+ response=requests.get(url,params=params,timeout=25)
+ try:
+  response.raise_for_status()
+  data=response.json()
+  if "error" in data:raise RuntimeError(str(data["error"]))
+ except Exception as exc:
+  print(label+"_FAILURE "+json.dumps({"url":response.url,"params":params,"http_status":response.status_code,"body":response.text[:1200],"error":str(exc)}),flush=True)
+  raise
+ print(label+"_OK "+json.dumps({"count":len(data.get("features",[]))}),flush=True)
+ return data.get("features",[])
+def literal(value,field_type):
+ if field_type in ("esriFieldTypeInteger","esriFieldTypeSmallInteger","esriFieldTypeOID"):
+  return str(int(value))
+ if field_type=="esriFieldTypeString":
+  return "'"+str(value).replace("'","''")+"'"
+ raise AssertionError("Unsupported join field type "+field_type)
 def main():
  pf,rf,vf=(fields(x) for x in (PARCEL,LAYERS["road"],LAYERS["paved"]))
  print("LAYER_FIELDS "+json.dumps({"parcel":pf,"road":rf,"pavement":vf}),flush=True)
@@ -37,7 +55,8 @@ def main():
    for pavement in paved:
     pg=transform(PROJECT,geom(pavement));rg=transform(PROJECT,geom(road))
     if pg.is_empty or rg.is_empty or not pg.is_valid or not rg.is_valid:continue
-    candidates=query(PARCEL,geometry=json.dumps(dict(road["geometry"],spatialReference={"wkid":4326})),geometryType="esriGeometryPolyline",spatialRel="esriSpatialRelIntersects",resultRecordCount=100)
+    parcel_params={"f":"json","geometry":json.dumps(dict(road["geometry"],spatialReference={"wkid":4326})),"geometryType":"esriGeometryPolyline","spatialRel":"esriSpatialRelIntersects","outFields":"OBJECTID,ACCOUNT,PKEY","returnGeometry":"true","outSR":4326,"resultRecordCount":100}
+    candidates=diagnostic_query(PARCEL,parcel_params,"PARCEL_SPATIAL")
     for parcel in candidates:
      a=parcel.get("attributes") or {};pid=a.get("ACCOUNT")
      if not pid:continue

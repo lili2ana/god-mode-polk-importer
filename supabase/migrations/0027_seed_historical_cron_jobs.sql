@@ -1,4 +1,4 @@
--- Reconstruct the two historical named schedules for clean ephemeral migration replay.
+-- Reconstruct the four historical named schedules for clean ephemeral migration replay.
 -- Names, schedules and commands were checked against the production cron catalog.
 -- Freshly reconstructed jobs are disabled: this migration must not start ingestion.
 -- Existing jobs are never overwritten; the later legacy migration validates them.
@@ -15,4 +15,14 @@ BEGIN
       'select god_mode_ops.refresh_target_parcels();') INTO job_id;
     PERFORM cron.alter_job(job_id, active := false);
   END IF;
-END $$;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'god_mode_dd_worker_daily') THEN
+    SELECT cron.schedule('god_mode_dd_worker_daily', '5 6 * * *',
+      'select god_mode_ops.invoke_internal_worker(''god-mode-dd-worker'');') INTO job_id;
+    PERFORM cron.alter_job(job_id, active := false);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'god_mode_dd_finalize_daily') THEN
+    SELECT cron.schedule('god_mode_dd_finalize_daily', '15 6 * * *',
+      'select god_mode_ops.invoke_internal_worker(''god-mode-dd-finalize'');') INTO job_id;
+    PERFORM cron.alter_job(job_id, active := false);
+  END IF;
+END $;

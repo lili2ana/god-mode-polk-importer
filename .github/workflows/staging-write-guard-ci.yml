@@ -39,13 +39,16 @@ jobs:
       - name: Negative-path HTTP probe against production handlers
         run: |
           python3 - <<'PY'
-          import json, time, urllib.request, urllib.error
+          import json, time, urllib.request, urllib.error, subprocess, shlex
+          status = subprocess.check_output(['supabase', 'status', '-o', 'env'], text=True)
+          values = dict(line.split('=', 1) for line in status.splitlines() if '=' in line)
+          anon_key = shlex.split(values['ANON_KEY'])[0]
           base = 'http://127.0.0.1:54321/functions/v1/'
           for handler in ('god-mode-dd-finalize', 'god-mode-gis-verify'):
               url = base + handler
               for attempt in range(40):
                   try:
-                      req = urllib.request.Request(url, data=b'{}', headers={'Content-Type':'application/json'}, method='POST')
+                      req = urllib.request.Request(url, data=b'{}', headers={'Content-Type':'application/json', 'Authorization': 'Bearer ' + anon_key, 'apikey': anon_key}, method='POST')
                       response = urllib.request.urlopen(req, timeout=3)
                       raise AssertionError(f'{handler}: unexpected success {response.status}')
                   except urllib.error.HTTPError as exc:

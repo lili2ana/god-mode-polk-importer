@@ -25,4 +25,4 @@ BEGIN
       'select god_mode_ops.invoke_internal_worker(''god-mode-dd-finalize'');') INTO job_id;
     PERFORM cron.alter_job(job_id, active := false);
   END IF;
-END $;
+END $$;

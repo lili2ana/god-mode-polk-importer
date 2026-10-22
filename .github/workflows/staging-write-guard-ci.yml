@@ -36,6 +36,13 @@ jobs:
         run: |
           supabase functions serve --no-verify-jwt > /tmp/write-guard-functions.log 2>&1 &
           echo $! > /tmp/write-guard-functions.pid
+      - name: Capture ephemeral database state before denied requests
+        run: |
+          docker exec supabase_db_god-mode-polk-importer psql -U postgres -d postgres -At -c "
+            SELECT 'properties:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.properties t), ''));
+            SELECT 'due_diligence_reviews:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.due_diligence_reviews t), ''));
+            SELECT 'dd_security_backup:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.review_id::text) FROM god_mode_ops.dd_security_backup t), ''));
+          " > /tmp/write-guard-db-before.txt
       - name: Negative-path HTTP probe against production handlers
         run: |
           python3 - <<'PY'
@@ -66,6 +73,16 @@ jobs:
               else:
                   raise SystemExit(f'FAIL: {handler} did not become available')
           PY
+      - name: Verify denied HTTP requests caused zero database state changes
+        if: success()
+        run: |
+          docker exec supabase_db_god-mode-polk-importer psql -U postgres -d postgres -At -c "
+            SELECT 'properties:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.properties t), ''));
+            SELECT 'due_diligence_reviews:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.due_diligence_reviews t), ''));
+            SELECT 'dd_security_backup:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.review_id::text) FROM god_mode_ops.dd_security_backup t), ''));
+          " > /tmp/write-guard-db-after.txt
+          diff -u /tmp/write-guard-db-before.txt /tmp/write-guard-db-after.txt
+          echo 'PASS: zero database state changes across scoped tables after denied HTTP requests'
       - name: Show Edge Function runtime diagnostics on failure
         if: failure()
         run: |

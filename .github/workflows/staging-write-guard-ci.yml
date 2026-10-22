@@ -8,6 +8,8 @@ on:
       - 'tests/critical_handlers_test.ts'
       - 'supabase/functions/god-mode-dd-finalize/**'
       - 'supabase/functions/god-mode-gis-verify/**'
+      - 'supabase/functions/god-mode-dd-worker/**'
+      - 'supabase/functions/god-mode-title-access-worker/**'
       - 'supabase/migrations/**'
       - 'supabase/functions/_shared/write_guard.ts'
 permissions:
@@ -51,7 +53,7 @@ jobs:
           values = dict(line.split('=', 1) for line in status.splitlines() if '=' in line)
           anon_key = shlex.split(values['ANON_KEY'])[0]
           base = 'http://127.0.0.1:54321/functions/v1/'
-          for handler in ('god-mode-dd-finalize', 'god-mode-gis-verify'):
+          for handler in ('god-mode-dd-finalize', 'god-mode-gis-verify', 'god-mode-dd-worker', 'god-mode-title-access-worker'):
               url = base + handler
               for attempt in range(40):
                   try:

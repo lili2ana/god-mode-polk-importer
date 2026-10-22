@@ -47,4 +47,4 @@ export async function handleRequest(req: Request, getEnv: (name: string) => stri
  }catch(e){return respond({parcel_id:parcel,error:"GIS retrieval failed",detail:String(e),qualification_status:"HOLD"},502)}
 }
 
-if (import.meta.main) Deno.serve(handleRequest);
+if (import.meta.main) Deno.serve((req: Request) => handleRequest(req));

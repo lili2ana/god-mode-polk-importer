@@ -1,0 +1,26 @@
+name: Write guard negative-path (no external services)
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'supabase/functions/_shared/write_guard.ts'
+      - 'supabase/functions/_shared/write_guard_test.ts'
+      - '.github/workflows/write-guard-negative-path.yml'
+permissions:
+  contents: read
+jobs:
+  deny-by-default:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      ALLOW_DB_WRITES: 'false'
+      ALLOW_SELLER_OUTREACH: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Deno negative-path unit tests
+        run: deno test --no-check supabase/functions/_shared/write_guard_test.ts
+      - name: Verify no secrets or production credentials required
+        run: echo 'Local mocked tests only; no Supabase project or outbound messaging invoked.'

@@ -63,6 +63,15 @@ jobs:
               else:
                   raise SystemExit(f'FAIL: {handler} did not become available')
           PY
+      - name: Show Edge Function runtime diagnostics on failure
+        if: failure()
+        run: |
+          echo '=== Edge Function serve output (last 120 lines) ==='
+          if test -f /tmp/write-guard-functions.log; then tail -n 120 /tmp/write-guard-functions.log; else echo 'No serve log created'; fi
+          echo '=== Edge Function serve process ==='
+          if test -f /tmp/write-guard-functions.pid; then ps -p "$(cat /tmp/write-guard-functions.pid)" -o pid,stat,args || true; fi
+          echo '=== Supabase services ==='
+          supabase status || true
       - name: Stop ephemeral stack
         if: always()
         run: |

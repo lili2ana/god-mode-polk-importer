@@ -1,10 +1,11 @@
+import { assertDbWritesAuthorized, WriteAuthorizationDenied } from "../_shared/write_guard.ts";
 import { type Dependencies, json, protect } from "../_shared/auth.ts";
 
 const OR_BASE = "https://apps.polkcountyclerk.net/browserviewor/";
 const OFFICIAL_RECORDS = "https://www.polkclerkfl.gov/184/Official-Records";
 
 export function buildHandler(deps: Dependencies) {
-  return protect("god-mode-title-access-worker", "POST", async (req, sb) => {
+  const protectedHandler = protect("god-mode-title-access-worker", "POST", async (req, sb) => {
     const started = new Date().toISOString();
     const rawLimit = new URL(req.url).searchParams.get("limit") ?? "5";
     if (!/^[1-5]$/.test(rawLimit)) {
@@ -109,4 +110,14 @@ export function buildHandler(deps: Dependencies) {
       access_clearance_automated: false,
     });
   }, deps);
+  return async (req: Request): Promise<Response> => {
+    if (req.method === "POST") {
+      try { assertDbWritesAuthorized(deps.env); }
+      catch (error) {
+        if (error instanceof WriteAuthorizationDenied) return json({ ok: false, error: error.code }, 403);
+        throw error;
+      }
+    }
+    return protectedHandler(req);
+  };
 }

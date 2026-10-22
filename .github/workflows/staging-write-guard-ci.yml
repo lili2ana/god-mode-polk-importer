@@ -53,6 +53,9 @@ jobs:
                       raise AssertionError(f'{handler}: unexpected success {response.status}')
                   except urllib.error.HTTPError as exc:
                       raw = exc.read().decode()
+                      if exc.code in (502, 503) and attempt < 39:
+                          time.sleep(2)
+                          continue
                       try: body = json.loads(raw)
                       except ValueError: raise AssertionError(f'{handler}: unexpected non-JSON denial {exc.code}: {raw}')
                       assert exc.code == 403 and body.get('error') == 'DB_WRITES_DISABLED', (handler, exc.code, body)

@@ -1,3 +1,4 @@
+import { eligibleRows } from "../_shared/gates.ts";
 import { type Dependencies, json, protect } from "../_shared/auth.ts";
 import {
   amount,
@@ -91,6 +92,9 @@ export function buildHandler(deps: Dependencies) {
         headers: { "content-type": "application/json" },
       });
     }
+    let eligible;
+    try { eligible = await eligibleRows(sb, rows ?? [], "dd"); }
+    catch { return json({ ok: false, error: "Seller gate unavailable" }, 503); }
     let zoningLayer: number | null = null, streetLayer: number | null = null;
     try {
       zoningLayer = await layerByName(
@@ -102,7 +106,7 @@ export function buildHandler(deps: Dependencies) {
       streetLayer = await layerByName(STREETS, /street|road|centerline/i);
     } catch (_) {}
     const results: any[] = [];
-    for (const d of rows ?? []) {
+    for (const d of eligible) {
       if (Date.now() >= deadline) break;
       const p: any = (d as any).properties;
       const parcel = String(p?.parcel_id ?? "");
@@ -187,7 +191,8 @@ export function buildHandler(deps: Dependencies) {
         if (true) {
           let wet: any = null;
           let failures = 0;
-          for (const L of [0, 1, 2, 3, 4, 5]) {
+          // NWI metadata exposes one spatial feature layer; layer 1 is a table.
+          for (const L of [0]) {
             try {
               const z = await J(
                 q(`${NWI}/${L}/query`, {
@@ -212,7 +217,8 @@ export function buildHandler(deps: Dependencies) {
           findings.wetlands = {
             source: "USFWS NWI",
             checked_at: started,
-            hit: wet ? true : null,
+            hit: wet ? true : (failures === 0 ? false : null),
+            source_error: failures > 0,
             failed_layers: failures,
             scope: "point_only_not_parcel_clearance",
             layer: wet?.layer ?? null,

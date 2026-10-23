@@ -1,0 +1,42 @@
+name: Transaction Engine Tests
+
+on:
+  push:
+    branches:
+      - codex/transaction-engine-core
+  pull_request:
+    paths:
+      - "supabase/migrations/20261003*_transaction*.sql"
+      - "tests/test_transaction_engine_postgres.py"
+      - ".github/workflows/test-transaction-engine.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POLK_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:55432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check psycopg2-binary
+      - name: Run transaction integration tests
+        run: python -m unittest tests.test_transaction_engine_postgres -v

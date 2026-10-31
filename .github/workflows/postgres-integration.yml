@@ -1,0 +1,70 @@
+name: Postgres integration - Lee County write guard
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tests/lee_county_write_guard_negative.sql'
+      - '.github/workflows/postgres-integration.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-integration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lee-write-guard-negative:
+    name: Lee County write-guard negative test (staging only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Pin the destination to the isolated staging project's direct database
+      # endpoint. Do not use a configurable URL that could point at production.
+      PGHOST: db.ltwqgkcblvtscgldxvjw.supabase.co
+      PGPORT: '5432'
+      PGDATABASE: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${{ secrets.SUPABASE_STAGING_PGPASSWORD }}
+      PGSSLMODE: require
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Require staging credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PGPASSWORD:-}" ]]; then
+            echo "::error::SUPABASE_STAGING_PGPASSWORD is not configured."
+            exit 1
+          fi
+
+      - name: Verify pinned staging connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_db="$(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT current_database()')"
+          if [[ "$actual_db" != "postgres" ]]; then
+            echo "::error::Unexpected database name: $actual_db"
+            exit 1
+          fi
+          echo "Connected to the pinned staging endpoint; database name is postgres."
+
+      - name: Run negative write-guard assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 \
+            -v guard_test_isolated=1 \
+            -v guard_test_project_ref=ltwqgkcblvtscgldxvjw \
+            -f tests/lee_county_write_guard_negative.sql

@@ -14,3 +14,13 @@ BEGIN
     END IF;
 END;
 $$;
+
+CREATE TABLE IF NOT EXISTS god_mode_ops.write_control (
+    id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    writes_enabled boolean NOT NULL DEFAULT false,
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO god_mode_ops.write_control (id, writes_enabled)
+VALUES (1, false)
+ON CONFLICT (id) DO NOTHING;

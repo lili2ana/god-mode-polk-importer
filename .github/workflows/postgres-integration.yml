@@ -60,6 +60,13 @@ jobs:
           fi
           echo "Connected through the project-pinned staging pooler; database name is postgres."
 
+      - name: Apply staging write-guard prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 \\
+            -f supabase/migrations/20261031000000_require_db_writes_enabled.sql
+
       - name: Run negative write-guard assertions
         shell: bash
         run: |

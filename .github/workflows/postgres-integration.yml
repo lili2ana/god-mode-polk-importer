@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # Pin the destination to the isolated staging project's direct database
-      # endpoint. Do not use a configurable URL that could point at production.
-      PGHOST: db.ltwqgkcblvtscgldxvjw.supabase.co
-      PGPORT: '5432'
+      # Pin both the Supabase pooler endpoint and project-qualified user to
+      # the isolated staging project. Never use production credentials here.
+      PGHOST: aws-0-us-east-1.pooler.supabase.com
+      PGPORT: '6543'
       PGDATABASE: postgres
-      PGUSER: postgres
+      PGUSER: postgres.ltwqgkcblvtscgldxvjw
       PGPASSWORD: ${{ secrets.SUPABASE_STAGING_PGPASSWORD }}
       PGSSLMODE: require
     steps:
@@ -58,7 +58,7 @@ jobs:
             echo "::error::Unexpected database name: $actual_db"
             exit 1
           fi
-          echo "Connected to the pinned staging endpoint; database name is postgres."
+          echo "Connected through the project-pinned staging pooler; database name is postgres."
 
       - name: Run negative write-guard assertions
         shell: bash

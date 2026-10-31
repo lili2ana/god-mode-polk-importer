@@ -64,8 +64,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          psql -X -v ON_ERROR_STOP=1 \\
-            -f supabase/migrations/20261031000000_require_db_writes_enabled.sql
+          psql -X -v ON_ERROR_STOP=1 -f supabase/migrations/20261031000000_require_db_writes_enabled.sql
 
       - name: Run negative write-guard assertions
         shell: bash

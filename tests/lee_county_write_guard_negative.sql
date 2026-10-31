@@ -165,6 +165,8 @@ BEGIN
         RAISE EXCEPTION 'Write-control row did not remain disabled';
     END IF;
 
+    PERFORM set_config('god_mode.writes_enabled', '0', true);
+
     RAISE NOTICE 'Write gate disabled within test transaction.';
 END;
 $disable_gate$;
@@ -236,7 +238,7 @@ BEGIN
         END;
 
         IF actual_state IS DISTINCT FROM '55000'
-           OR actual_message IS DISTINCT FROM 'DB_WRITES_DISABLED'
+           OR actual_message IS DISTINCT FROM 'Database writes are currently disabled'
         THEN
             RAISE EXCEPTION
                 'FAIL: % expected SQLSTATE 55000 / DB_WRITES_DISABLED; got % / %',

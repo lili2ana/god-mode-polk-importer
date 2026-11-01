@@ -21,6 +21,12 @@ CREATE TABLE IF NOT EXISTS god_mode_ops.write_control (
     updated_at timestamptz NOT NULL DEFAULT now()
 );
 
+-- CREATE TABLE IF NOT EXISTS does not reconcile a table created by an older
+-- version of this prerequisite. Add the required column for existing staging
+-- installations as well, defaulting the gate to disabled.
+ALTER TABLE god_mode_ops.write_control
+    ADD COLUMN IF NOT EXISTS db_writes_enabled boolean NOT NULL DEFAULT false;
+
 INSERT INTO god_mode_ops.write_control (id, db_writes_enabled)
 VALUES (1, false)
 ON CONFLICT (id) DO NOTHING;

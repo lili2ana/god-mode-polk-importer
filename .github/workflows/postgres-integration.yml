@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'tests/lee_county_write_guard_negative.sql'
+      - 'supabase/migrations/20261029000000_guard_lee_county_pipeline.sql'
       - '.github/workflows/postgres-integration.yml'
 
 permissions:

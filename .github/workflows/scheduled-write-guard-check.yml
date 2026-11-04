@@ -1,0 +1,123 @@
+name: Scheduled Lee County write-guard check
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: scheduled-write-guard-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lee-write-guard:
+    name: Lee County write-guard assertions (staging only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Pin the connection to the isolated staging project. Do not replace
+      # these values with production credentials or an unpinned endpoint.
+      PGHOST: aws-0-us-east-1.pooler.supabase.com
+      PGPORT: '6543'
+      PGDATABASE: postgres
+      PGUSER: postgres.ltwqgkcblvtscgldxvjw
+      PGPASSWORD: ${{ secrets.SUPABASE_STAGING_PGPASSWORD }}
+      PGSSLMODE: require
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Require staging credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PGPASSWORD:-}" ]]; then
+            echo "::error::SUPABASE_STAGING_PGPASSWORD is not configured."
+            exit 1
+          fi
+
+      - name: Verify pinned staging connection
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_db="$(psql -X -v ON_ERROR_STOP=1 -Atqc 'SELECT current_database()')"
+          if [[ "$actual_db" != "postgres" ]]; then
+            echo "::error::Unexpected database name: $actual_db"
+            exit 1
+          fi
+          echo "Connected through the project-pinned staging pooler; database name is postgres."
+
+      - name: Apply Lee County write-guard migration to staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 \
+            -f supabase/migrations/20261029000000_guard_lee_county_pipeline.sql
+
+      - name: Run all five negative write-guard assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -X -v ON_ERROR_STOP=1 \
+            -v guard_test_isolated=1 \
+            -v guard_test_project_ref=ltwqgkcblvtscgldxvjw \
+            -f tests/lee_county_write_guard_negative.sql
+
+      - name: Notify maintainers of failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'ALERT: Scheduled Lee County write-guard check failed';
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              'The staging-only Lee County write-guard workflow failed.',
+              '',
+              `- Workflow run: ${runUrl}`,
+              `- Trigger: ${context.eventName}`,
+              `- Ref: ${context.ref}`,
+              `- Commit: ${context.sha}`,
+              '',
+              'Review the failed step and logs. Do not enable database writes or use production credentials to bypass this failure.'
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              ...context.repo,
+              state: 'open',
+              per_page: 100
+            });
+            const alert = existing.data.find(issue =>
+              !issue.pull_request && issue.title === title
+            );
+
+            if (alert) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: alert.number,
+                body
+              });
+              core.info(`Updated existing failure alert issue #${alert.number}.`);
+            } else {
+              const created = await github.rest.issues.create({
+                ...context.repo,
+                title,
+                body,
+                labels: ['bug']
+              });
+              core.info(`Created failure alert issue #${created.data.number}.`);
+            }

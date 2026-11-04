@@ -116,8 +116,7 @@ jobs:
               const created = await github.rest.issues.create({
                 ...context.repo,
                 title,
-                body,
-                labels: ['bug']
+                body
               });
               core.info(`Created failure alert issue #${created.data.number}.`);
             }

@@ -6,7 +6,7 @@ on:
         description: 'Which staging job to run (geometry full, geometry batch, or FEMA pilot)'
         required: true
         type: choice
-        options: [geometry-full, geometry-batch, fema-pilot]
+        options: [geometry-full, geometry-batch, fema-pilot, fema-local-import, fema-local-intersect]
         default: geometry-batch
       batch_limit:
         description: 'Geometry 1-1000 per batch, FEMA pilot 1-200'
@@ -91,3 +91,66 @@ jobs:
         env:
           LIMIT: ${{ inputs.batch_limit || 10 }}
         run: python run_lee_fema_nfhl_worker.py --limit "$LIMIT" --write
+
+  fema-local-import:
+    if: ${{ inputs.stage == 'fema-local-import' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4' 'geopandas>=1.1,<2' 'pyogrio>=0.12,<1'
+      - name: Test genuine static FEMA download and local spatial classification logic
+        run: python -m unittest discover -s tests -p 'test_lee_nfhl_local_postgis.py' -v
+      - name: Require staging-only database URL
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: dedicated STAGING_SUPABASE_DB_URL missing'; exit 1; fi
+      - name: Install optional database root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'fema-staging-ca.crt'
+              p.write_text(cert+'\\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\\n')
+          PY
+      - name: Download official Lee NFHL county archive and compute local PostGIS intersections
+        run: python run_lee_fema_static_postgis.py --write --download-dir "$RUNNER_TEMP/lee-nfhl" --intersect-limit 25
+
+  fema-local-intersect:
+    if: ${{ inputs.stage == 'fema-local-intersect' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m unittest discover -s tests -p 'test_lee_nfhl_local_postgis.py' -v
+      - name: Require staging-only database URL
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: dedicated STAGING_SUPABASE_DB_URL missing'; exit 1; fi
+      - name: Install optional database root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'fema-staging-ca.crt'
+              p.write_text(cert+'\\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\\n')
+          PY
+      - name: Intersect only validated local FEMA archive with verified Lee parcel geometries
+        env:
+          LIMIT: ${{ inputs.batch_limit || 25 }}
+        run: python run_lee_fema_static_postgis.py --intersect-only --intersect-limit "$LIMIT" --write

@@ -117,7 +117,7 @@ jobs:
           cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
           if cert:
               p=pathlib.Path(os.environ['RUNNER_TEMP'])/'fema-staging-ca.crt'
-              p.write_text(cert+'\\n')
+              p.write_text(cert+'\n')
               with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\\n')
           PY
       - name: Download official Lee NFHL county archive and compute local PostGIS intersections
@@ -147,7 +147,7 @@ jobs:
           cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
           if cert:
               p=pathlib.Path(os.environ['RUNNER_TEMP'])/'fema-staging-ca.crt'
-              p.write_text(cert+'\\n')
+              p.write_text(cert+'\n')
               with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\\n')
           PY
       - name: Intersect only validated local FEMA archive with verified Lee parcel geometries

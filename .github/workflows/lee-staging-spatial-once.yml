@@ -11,6 +11,40 @@ concurrency:
   group: lee-spatial-evidence-once
   cancel-in-progress: false
 jobs:
+  source-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify tax-report importer source rules
+        run: python -m unittest discover -s tests -p 'test_lee_tax_collector_report_worker.py' -v
+      - name: Check only source HTTP availability (no large downloads, no data writes)
+        run: |
+          python - <<'PY'
+          import urllib.request, urllib.error
+          urls = {
+            'FEMA_NFHL': 'https://msc.fema.gov/portal/downloadProduct?productID=NFHL_12071C',
+            'USFWS_NWI': 'https://documentst.ecosphere.fws.gov/wetlands/data/State-Downloads/FL_geopackage_wetlands.zip',
+            'LEE_TAX_REPORTS': 'https://county-taxes.net/fl-lee/reports'
+          }
+          for label, url in urls.items():
+              try:
+                  r = urllib.request.urlopen(
+                      urllib.request.Request(url, method='HEAD',
+                                             headers={'User-Agent':'GodMode-source-preflight/1.0'}),
+                      timeout=18)
+                  print(label, 'HTTP', r.status,
+                        'CONTENT_TYPE', r.headers.get('Content-Type'),
+                        'CONTENT_LENGTH', r.headers.get('Content-Length'))
+                  r.close()
+              except urllib.error.HTTPError as e:
+                  print(label, 'HTTP', e.code, 'BLOCKED_OR_REQUIRES_REVIEW')
+              except Exception as e:
+                  print(label, 'FETCH_FAILED', type(e).__name__)
+          PY
   preflight:
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,93 @@
+name: Lee County verified GIS and FEMA staging
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Which staging job to run (geometry full, geometry batch, or FEMA pilot)'
+        required: true
+        type: choice
+        options: [geometry-full, geometry-batch, fema-pilot]
+        default: geometry-batch
+      batch_limit:
+        description: 'Geometry 1-1000 per batch, FEMA pilot 1-200'
+        required: true
+        type: number
+        default: 100
+  schedule:
+    - cron: '25 10 * * *' # Only operates after code reaches default branch.
+permissions:
+  contents: read
+concurrency:
+  group: lee-staging-source-verified-spatial
+  cancel-in-progress: false
+jobs:
+  verified-geometry:
+    if: ${{ github.event_name == 'schedule' || inputs.stage == 'geometry-full' || inputs.stage == 'geometry-batch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install verified GIS dependencies
+        run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - name: Test source-backed acquisition and FEMA spatial intersections
+        run: python -m unittest discover -s tests -p 'test_lee*worker.py' -v
+      - name: Assert staging secret present
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: STAGING_SUPABASE_DB_URL must point to the approved STAGING project'; exit 1; fi
+      - name: Install optional database CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'staging-ca.crt'
+              path.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as out: out.write('PGSSLROOTCERT='+str(path)+'\n')
+          PY
+      - name: Acquire only genuine Lee parcel polygons into private staging
+        env:
+          LIMIT: ${{ inputs.batch_limit || 500 }}
+          IS_FULL: ${{ github.event_name == 'schedule' || inputs.stage == 'geometry-full' }}
+        run: |
+          if [ "$IS_FULL" = 'true' ]; then
+            python run_lee_parcel_geometry_worker.py --limit 500 --delay 0.25 --write --all
+          else
+            python run_lee_parcel_geometry_worker.py --limit "$LIMIT" --delay 0.25 --write
+          fi
+  fema-pilot:
+    if: ${{ inputs.stage == 'fema-pilot' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4'
+      - run: python -m unittest discover -s tests -p 'test_lee*worker.py' -v
+      - name: Check staging secret
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: staging secret missing'; exit 1; fi
+      - name: Set optional database CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              path=pathlib.Path(os.environ['RUNNER_TEMP'])/'staging-ca.crt'
+              path.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as out: out.write('PGSSLROOTCERT='+str(path)+'\n')
+          PY
+      - name: Test real FEMA service and write only verified intersections
+        env:
+          LIMIT: ${{ inputs.batch_limit || 10 }}
+        run: python run_lee_fema_nfhl_worker.py --limit "$LIMIT" --write

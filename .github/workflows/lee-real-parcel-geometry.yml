@@ -1,4 +1,4 @@
-name: Lee County verified GIS and FEMA staging
+name: Lee County verified GIS, FEMA, and NWI staging
 on:
   workflow_dispatch:
     inputs:
@@ -6,7 +6,7 @@ on:
         description: 'Which staging job to run (geometry full, geometry batch, or FEMA pilot)'
         required: true
         type: choice
-        options: [geometry-full, geometry-batch, fema-pilot, fema-local-import, fema-local-intersect]
+        options: [geometry-full, geometry-batch, fema-pilot, fema-local-import, fema-local-intersect, nwi-local-import, nwi-local-intersect]
         default: geometry-batch
       batch_limit:
         description: 'Geometry 1-1000 per batch, FEMA pilot 1-200'
@@ -154,3 +154,67 @@ jobs:
         env:
           LIMIT: ${{ inputs.batch_limit || 25 }}
         run: python run_lee_fema_static_postgis.py --intersect-only --intersect-limit "$LIMIT" --write
+
+  nwi-local-import:
+    if: ${{ inputs.stage == 'nwi-local-import' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install GeoPackage and PostGIS dependencies
+        run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4' 'geopandas>=1.1,<2' 'pyogrio>=0.12,<1'
+      - name: Run fail-closed wetlands worker tests
+        run: python -m unittest discover -s tests -p 'test_lee_nwi_local_postgis.py' -v
+      - name: Require staging DSN
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: dedicated staging secret missing'; exit 1; fi
+      - name: Install optional staging root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'nwi-staging-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Download official Florida NWI GeoPackage and import Lee spatial subset
+        run: python run_lee_nwi_local_postgis.py --import-only --write --download-dir "$RUNNER_TEMP/lee-nwi"
+
+  nwi-local-intersect:
+    if: ${{ inputs.stage == 'nwi-local-intersect' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3'
+      - run: python -m unittest discover -s tests -p 'test_lee_nwi_local_postgis.py' -v
+      - name: Require staging DSN
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then echo 'BLOCKED: dedicated staging secret missing'; exit 1; fi
+      - name: Install optional staging root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'nwi-staging-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Compute local, source-backed NWI wetlands coverage
+        env:
+          LIMIT: ${{ inputs.batch_limit || 25 }}
+        run: python run_lee_nwi_local_postgis.py --intersect-only --limit "$LIMIT" --write

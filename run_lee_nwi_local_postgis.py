@@ -373,12 +373,16 @@ def intersect_parcels(conn,dataset_id,source_url,limit,write=False):
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', type=Path)
+    parser.add_argument('--official-source-confirmed', action='store_true',
+                        help='Confirm that a local archive came from the FWS Florida download link')
     parser.add_argument('--download-dir', type=Path)
     parser.add_argument('--import-only', action='store_true')
     parser.add_argument('--intersect-only', action='store_true')
     parser.add_argument('--limit', type=int,default=25)
     parser.add_argument('--write',action='store_true')
     opts=parser.parse_args(argv)
+    if opts.archive and not opts.official_source_confirmed:
+        parser.error('--archive requires --official-source-confirmed')
     if opts.import_only and opts.intersect_only:
         parser.error('Choose either import-only or intersect-only')
     if opts.limit<1 or opts.limit>2710:

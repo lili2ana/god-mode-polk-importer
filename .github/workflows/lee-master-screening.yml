@@ -1,0 +1,37 @@
+name: Lee County God Mode master evidence screening
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '45 11 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: lee-master-screening-staging-only
+  cancel-in-progress: false
+jobs:
+  evaluate-staging-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'psycopg2-binary>=2.9,<3'
+      - name: Unit-test fail-closed staging runner
+        run: python -m unittest discover -s tests -p 'test_lee_master_screening_worker.py' -v
+      - name: Configure optional staging database root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'staging-master-root-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Evaluate current verified evidence (no CRM writes)
+        run: python -u run_lee_master_screening.py --write

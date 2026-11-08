@@ -1,0 +1,112 @@
+name: One-time Lee staging FEMA and NWI archive execution
+on:
+  push:
+    branches:
+      - feature/lee-geometry-fema-evidence-20261107
+    paths:
+      - '.github/workflows/lee-staging-spatial-once.yml'
+permissions:
+  contents: read
+concurrency:
+  group: lee-spatial-evidence-once
+  cancel-in-progress: false
+jobs:
+  source-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify tax-report importer source rules
+        run: python -m unittest discover -s tests -p 'test_lee_tax_collector_report_worker.py' -v
+      - name: Check only source HTTP availability (no large downloads, no data writes)
+        run: |
+          python - <<'PY'
+          import urllib.request, urllib.error
+          urls = {
+            'FEMA_NFHL': 'https://msc.fema.gov/portal/downloadProduct?productID=NFHL_12071C',
+            'USFWS_NWI': 'https://documentst.ecosphere.fws.gov/wetlands/data/State-Downloads/FL_geopackage_wetlands.zip',
+            'LEE_TAX_REPORTS': 'https://county-taxes.net/fl-lee/reports'
+          }
+          for label, url in urls.items():
+              try:
+                  r = urllib.request.urlopen(
+                      urllib.request.Request(url, method='HEAD',
+                                             headers={'User-Agent':'GodMode-source-preflight/1.0'}),
+                      timeout=18)
+                  print(label, 'HTTP', r.status,
+                        'CONTENT_TYPE', r.headers.get('Content-Type'),
+                        'CONTENT_LENGTH', r.headers.get('Content-Length'))
+                  r.close()
+              except urllib.error.HTTPError as e:
+                  print(label, 'HTTP', e.code, 'BLOCKED_OR_REQUIRES_REVIEW')
+              except Exception as e:
+                  print(label, 'FETCH_FAILED', type(e).__name__)
+          PY
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify staging-only database secret configured
+        env:
+          STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+        shell: bash
+        run: |
+          if [ -z "$STAGING_SUPABASE_DB_URL" ]; then
+            echo "BLOCKED: Configure STAGING_SUPABASE_DB_URL for Supabase project ltwqgkcblvtscgldxvjw"
+            exit 1
+          fi
+          echo "Staging secret present; Python worker will independently verify project identity."
+  fema-nfhl-static:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4' 'geopandas>=1.1,<2' 'pyogrio>=0.12,<1'
+      - run: python -m unittest discover -s tests -p 'test_lee_nfhl_local_postgis.py' -v
+      - name: Install verified database CA when configured
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'fema-staging-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Download official NFHL and run first 500 intersections
+        run: python -u run_lee_fema_static_postgis.py --write --download-dir "$RUNNER_TEMP/nfhl" --intersect-limit 500
+  wetlands-nwi-static:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3.6,<4' 'geopandas>=1.1,<2' 'pyogrio>=0.12,<1'
+      - run: python -m unittest discover -s tests -p 'test_lee_nwi_local_postgis.py' -v
+      - name: Install verified database CA when configured
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'nwi-staging-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as f:f.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Download official NWI, import Lee subset and intersect queued polygons
+        run: python -u run_lee_nwi_local_postgis.py --write --download-dir "$RUNNER_TEMP/nwi" --limit 2710

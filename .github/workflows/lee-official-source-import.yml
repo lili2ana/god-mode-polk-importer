@@ -1,0 +1,97 @@
+name: Lee staging official tax and appraiser report imports
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Source import or master refresh"
+        required: true
+        type: choice
+        options: [govhub-tax, leepa-monthly-zip, master-refresh]
+        default: govhub-tax
+      report_date:
+        description: "Official report generation date in YYYY-MM-DD format"
+        required: true
+        type: string
+      valuation_year:
+        description: "Appraisal roll year (for the LeePA ZIP)"
+        required: false
+        type: string
+        default: "2026"
+      official_source_confirmed:
+        description: "Confirm this is an authorized official export"
+        required: true
+        type: boolean
+        default: false
+      write:
+        description: "Write only to private staging review tables; otherwise dry-run"
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: lee-official-source-review-staging
+  cancel-in-progress: false
+jobs:
+  source-verified-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+      LEE_GOVHUB_EXPORT_URL: ${{ secrets.LEE_GOVHUB_EXPORT_URL }}
+      REPORT_DATE: ${{ inputs.report_date }}
+      VALUATION_YEAR: ${{ inputs.valuation_year }}
+      CONFIRMED: ${{ inputs.official_source_confirmed }}
+      WRITE_MODE: ${{ inputs.write }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install staging import dependencies
+        run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3'
+      - name: Test official report ingestion and guardrails
+        run: |
+          python -m unittest discover -s tests -p 'test_lee_tax_collector_report_worker.py' -v
+          python -m unittest discover -s tests -p 'test_lee_tax_source_gate.py' -v
+      - name: Check dedicated staging DSN without printing credentials
+        run: |
+          python - <<'PY'
+          import os
+          from run_lee_master_screening import staging_dsn_is_safe
+          assert staging_dsn_is_safe(os.environ.get('STAGING_SUPABASE_DB_URL','')), 'BLOCKED: staging-only DSN secret absent or invalid'
+          print('PASS: staging-only DB host/user verified')
+          PY
+      - name: Install optional staging root CA
+        run: |
+          python - <<'PY'
+          import os,pathlib
+          cert=os.environ.get('SUPABASE_DB_CA_CERT','').strip()
+          if cert:
+              p=pathlib.Path(os.environ['RUNNER_TEMP'])/'lee-staging-source-ca.crt'
+              p.write_text(cert+'\n')
+              with open(os.environ['GITHUB_ENV'],'a') as out:out.write('PGSSLROOTCERT='+str(p)+'\n')
+          PY
+      - name: Import GovHub CSV as unverified tax observations
+        if: ${{ inputs.stage == 'govhub-tax' }}
+        run: |
+          if [ "$CONFIRMED" != "true" ]; then echo 'BLOCKED: source confirmation required'; exit 1; fi
+          opts=(--report-date "$REPORT_DATE" --official-export-confirmed --output "$RUNNER_TEMP/lee-tax-report.csv")
+          if [ "$WRITE_MODE" = "true" ]; then opts+=(--write); fi
+          python -u fetch_lee_govhub_report.py "${opts[@]}"
+      - name: Import LeePA monthly valuation data for provenance review
+        if: ${{ inputs.stage == 'leepa-monthly-zip' }}
+        run: |
+          if [ "$CONFIRMED" != "true" ]; then echo 'BLOCKED: source confirmation required'; exit 1; fi
+          opts=(--download-monthly-zip --report-date "$REPORT_DATE" --valuation-year "$VALUATION_YEAR" --official-export-confirmed --download-dir "$RUNNER_TEMP/leepa")
+          if [ "$WRITE_MODE" = "true" ]; then opts+=(--write); fi
+          python -u import_lee_appraiser_valuation.py "${opts[@]}"
+      - name: Re-evaluate private staging master evidence
+        if: ${{ inputs.stage == 'master-refresh' }}
+        run: |
+          if [ "$WRITE_MODE" = "true" ]; then
+            python -u run_lee_master_screening.py --write
+          else
+            python -u run_lee_master_screening.py
+          fi

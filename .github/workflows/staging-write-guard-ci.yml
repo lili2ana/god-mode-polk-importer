@@ -1,0 +1,101 @@
+name: Ephemeral Supabase write guard CI
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/staging-write-guard-ci.yml'
+      - 'tests/write_guard_test.ts'
+      - 'tests/critical_handlers_test.ts'
+      - 'supabase/functions/god-mode-dd-finalize/**'
+      - 'supabase/functions/god-mode-gis-verify/**'
+      - 'supabase/functions/god-mode-dd-worker/**'
+      - 'supabase/functions/god-mode-title-access-worker/**'
+      - 'supabase/migrations/**'
+      - 'supabase/functions/_shared/write_guard.ts'
+permissions:
+  contents: read
+jobs:
+  ephemeral-staging:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ALLOW_DB_WRITES: 'false'
+      ALLOW_SELLER_OUTREACH: 'false'
+      SUPABASE_ACCESS_TOKEN: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Native Deno mock tests
+        run: deno test --no-check tests/write_guard_test.ts tests/critical_handlers_test.ts supabase/functions/_shared/write_guard_test.ts
+      - name: Start ephemeral local Supabase
+        run: supabase start
+      - name: Start production Edge Functions locally (writes disabled)
+        run: |
+          supabase functions serve --no-verify-jwt > /tmp/write-guard-functions.log 2>&1 &
+          echo $! > /tmp/write-guard-functions.pid
+      - name: Capture ephemeral database state before denied requests
+        run: |
+          docker exec supabase_db_god-mode-polk-importer psql -U postgres -d postgres -At -c "
+            SELECT 'properties:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.properties t), ''));
+            SELECT 'due_diligence_reviews:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.due_diligence_reviews t), ''));
+            SELECT 'dd_security_backup:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.review_id::text) FROM god_mode_ops.dd_security_backup t), ''));
+          " > /tmp/write-guard-db-before.txt
+      - name: Negative-path HTTP probe against production handlers
+        run: |
+          python3 - <<'PY'
+          import json, time, urllib.request, urllib.error, subprocess, shlex
+          status = subprocess.check_output(['supabase', 'status', '-o', 'env'], text=True)
+          values = dict(line.split('=', 1) for line in status.splitlines() if '=' in line)
+          anon_key = shlex.split(values['ANON_KEY'])[0]
+          base = 'http://127.0.0.1:54321/functions/v1/'
+          for handler in ('god-mode-dd-finalize', 'god-mode-gis-verify', 'god-mode-dd-worker', 'god-mode-title-access-worker'):
+              url = base + handler
+              for attempt in range(40):
+                  try:
+                      req = urllib.request.Request(url, data=b'{}', headers={'Content-Type':'application/json', 'Authorization': 'Bearer ' + anon_key, 'apikey': anon_key}, method='POST')
+                      response = urllib.request.urlopen(req, timeout=3)
+                      raise AssertionError(f'{handler}: unexpected success {response.status}')
+                  except urllib.error.HTTPError as exc:
+                      raw = exc.read().decode()
+                      if exc.code in (502, 503) and attempt < 39:
+                          time.sleep(2)
+                          continue
+                      try: body = json.loads(raw)
+                      except ValueError: raise AssertionError(f'{handler}: unexpected non-JSON denial {exc.code}: {raw}')
+                      assert exc.code == 403 and body.get('error') == 'DB_WRITES_DISABLED', (handler, exc.code, body)
+                      print(f'PASS: {handler} live HTTP 403 DB_WRITES_DISABLED')
+                      break
+                  except (OSError, TimeoutError):
+                      time.sleep(2)
+              else:
+                  raise SystemExit(f'FAIL: {handler} did not become available')
+          PY
+      - name: Verify denied HTTP requests caused zero database state changes
+        if: success()
+        run: |
+          docker exec supabase_db_god-mode-polk-importer psql -U postgres -d postgres -At -c "
+            SELECT 'properties:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.properties t), ''));
+            SELECT 'due_diligence_reviews:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.id::text) FROM public.due_diligence_reviews t), ''));
+            SELECT 'dd_security_backup:' || md5(coalesce((SELECT string_agg(to_jsonb(t)::text, ',' ORDER BY t.review_id::text) FROM god_mode_ops.dd_security_backup t), ''));
+          " > /tmp/write-guard-db-after.txt
+          diff -u /tmp/write-guard-db-before.txt /tmp/write-guard-db-after.txt
+          echo 'PASS: zero database state changes across scoped tables after denied HTTP requests'
+      - name: Show Edge Function runtime diagnostics on failure
+        if: failure()
+        run: |
+          echo '=== Edge Function serve output (last 120 lines) ==='
+          if test -f /tmp/write-guard-functions.log; then tail -n 120 /tmp/write-guard-functions.log; else echo 'No serve log created'; fi
+          echo '=== Edge Function serve process ==='
+          if test -f /tmp/write-guard-functions.pid; then ps -p "$(cat /tmp/write-guard-functions.pid)" -o pid,stat,args || true; fi
+          echo '=== Supabase services ==='
+          supabase status || true
+      - name: Stop ephemeral stack
+        if: always()
+        run: |
+          if test -f /tmp/write-guard-functions.pid; then kill "$(cat /tmp/write-guard-functions.pid)" || true; fi
+          supabase stop --no-backup || true

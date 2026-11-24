@@ -5,7 +5,7 @@ State is restored/saved as a GitHub Actions artifact by the companion workflow.
 A missing state file starts a silent baseline. Never interpret missing data as zero.
 """
 import json
-from contextlib import closing
+from contextlib import closing, contextmanager
 import os
 import pathlib
 import sys
@@ -21,6 +21,35 @@ JOBS = ("LEE_PARCEL_GEOMETRY", "FEMA_NFHL", "USFWS_NWI", "LEE_TAX_COLLECTOR")
 TABLES = ("lee_parcel_fema_intersections", "lee_parcel_nwi_intersections",
           "lee_tax_report_import_observations", "lee_verified_owner_valuation", "lee_master_screening")
 STATE_FILE = pathlib.Path(os.getenv("MONITOR_STATE_FILE", ".last_state.json"))
+
+
+@contextmanager
+def diagnostic_stage(stage):
+    """Log only developer-controlled stage labels; never exception messages."""
+    try:
+        yield
+    except Exception as exc:
+        category = ("validation" if isinstance(exc, ValueError) else
+                    "http" if isinstance(exc, urllib.error.HTTPError) else
+                    "runtime")
+        print(f"Monitoring blocked: stage={stage}; category={category}; snapshot not advanced.",
+              file=sys.stderr)
+        raise
+
+
+def check_schema(cur):
+    """Read-only parse and permission checks for every monitored relation."""
+    required = {
+        "lee_parcel_api_jobs": "source_name, job_status, total_parcels_queued, parcels_processed, block_reason, endpoint_verified",
+        "lee_master_screening": "eligible_for_contact, evidence_screening_status, geometry_verified, fema_verified, nwi_verified, current_tax_verified, current_delinquency_verified, owner_value_verified, title_access_verified",
+        "lee_parcel_geometry_reconciliation": "status",
+        "lee_parcel_geometry_evidence": "1",
+    }
+    for table in TABLES:
+        required.setdefault(table, "1")
+    for table, columns in required.items():
+        with diagnostic_stage("supabase.schema." + table):
+            cur.execute(f"SELECT {columns} FROM god_mode_ops.{table} LIMIT 0")
 
 
 def require(name):
@@ -69,14 +98,16 @@ def validate_db(db):
 
 
 def check_supabase(dsn):
-    if not safe_staging_dsn(dsn):
-        raise ValueError("Refusing database URL: not the approved staging Supabase project")
+    with diagnostic_stage('supabase.staging_url'):
+        if not safe_staging_dsn(dsn):
+            raise ValueError('Refusing database URL: not the approved staging Supabase project')
     import psycopg2
     with closing(psycopg2.connect(dsn, connect_timeout=15,
                                   sslmode="verify-full" if os.getenv("PGSSLROOTCERT") else "require",
                                   options="-c default_transaction_read_only=on")) as conn:
         conn.set_session(readonly=True)
         with conn.cursor() as cur:
+            check_schema(cur)
             cur.execute("""SELECT source_name, job_status, total_parcels_queued,
                                   parcels_processed, block_reason, endpoint_verified
                            FROM god_mode_ops.lee_parcel_api_jobs""")
@@ -106,9 +137,10 @@ def check_supabase(dsn):
             cur.execute("""SELECT COUNT(*) FROM god_mode_ops.lee_parcel_geometry_reconciliation
                            WHERE status='GEOMETRY_UNRESOLVED'""")
             unresolved = cur.fetchone()[0]
-    return validate_db({"jobs": jobs, "table_counts": table_counts, "qualified": qualified,
-                        "geometry_evidence_count": geometry_evidence,
-                        "reconciliation_unresolved": unresolved})
+    with diagnostic_stage("supabase.validate_counts"):
+        return validate_db({"jobs": jobs, "table_counts": table_counts, "qualified": qualified,
+                            "geometry_evidence_count": geometry_evidence,
+                            "reconciliation_unresolved": unresolved})
 
 
 def get_json(url, token):
@@ -280,19 +312,31 @@ def save_state(state):
 
 
 def main():
-    dsn = require("STAGING_SUPABASE_DB_URL")
-    token = require("GH_MONITOR_TOKEN")
-    url = require("ALERT_WEBHOOK_URL")
-    kind = webhook_kind(url)
-    previous = load_previous_state()
-    current = {"version": 1, "db": check_supabase(dsn), "github": check_github(token)}
-    alerts = diff(previous, current)
+    with diagnostic_stage("config.staging_dsn"):
+        dsn = require("STAGING_SUPABASE_DB_URL")
+    with diagnostic_stage("config.github_token"):
+        token = require("GH_MONITOR_TOKEN")
+    with diagnostic_stage("config.webhook_url"):
+        url = require("ALERT_WEBHOOK_URL")
+    with diagnostic_stage("config.webhook_kind"):
+        kind = webhook_kind(url)
+    with diagnostic_stage("snapshot.restore"):
+        previous = load_previous_state()
+    with diagnostic_stage("supabase.read"):
+        db = check_supabase(dsn)
+    with diagnostic_stage("github.read"):
+        github = check_github(token)
+    current = {"version": 1, "db": db, "github": github}
+    with diagnostic_stage("snapshot.compare"):
+        alerts = diff(previous, current)
     if alerts:
-        send_webhook(url, kind, "God Mode CI Watch\n" + "\n".join(alerts))
+        with diagnostic_stage("webhook.delivery"):
+            send_webhook(url, kind, "God Mode CI Watch\n" + "\n".join(alerts))
         print(f"Delivered {len(alerts)} meaningful change notification(s).")
     else:
         print("Baseline captured or no meaningful changes; notification suppressed.")
-    save_state(current)
+    with diagnostic_stage('snapshot.save'):
+        save_state(current)
     print("Read-only staging/GitHub check finished; snapshot saved.")
 
 
@@ -300,5 +344,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(f"Monitoring blocked ({type(exc).__name__}); snapshot not advanced.", file=sys.stderr)
+        print("Monitoring blocked; snapshot not advanced.", file=sys.stderr)
         sys.exit(1)

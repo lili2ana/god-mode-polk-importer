@@ -117,4 +117,37 @@ class MonitorTests(unittest.TestCase):
                     monitor.main()
                 self.assertFalse(file_path.exists())
 
+
+class DiagnosticTests(unittest.TestCase):
+    def test_missing_secret_reports_only_fixed_stage(self):
+        import monitor, io
+        from contextlib import redirect_stderr
+        from unittest.mock import patch
+        out = io.StringIO()
+        with patch.dict('os.environ', {}, clear=True), redirect_stderr(out):
+            with self.assertRaises(ValueError):
+                monitor.main()
+        self.assertIn('stage=config.staging_dsn', out.getvalue())
+
+    def test_untrusted_error_message_is_never_logged(self):
+        import monitor, io
+        from contextlib import redirect_stderr
+        out = io.StringIO()
+        with redirect_stderr(out):
+            with self.assertRaises(ValueError):
+                with monitor.diagnostic_stage('supabase.schema'):
+                    raise ValueError('postgresql://user:SECRET@example.com/db')
+        self.assertIn('stage=supabase.schema', out.getvalue())
+        self.assertNotIn('SECRET', out.getvalue())
+
+    def test_schema_preflight_checks_required_columns(self):
+        import monitor
+        from unittest.mock import Mock
+        cur = Mock()
+        monitor.check_schema(cur)
+        statements = [c.args[0] for c in cur.execute.call_args_list]
+        self.assertEqual(8, len(statements))
+        self.assertTrue(any('title_access_verified' in s and 'LIMIT 0' in s for s in statements))
+
+
 if __name__=='__main__':unittest.main()

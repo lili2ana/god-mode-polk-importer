@@ -1,3 +1,4 @@
+import { assertDbWritesAuthorized, WriteAuthorizationDenied } from "../_shared/write_guard.ts";
 import { type Dependencies, json, protect } from "../_shared/auth.ts";
 import {
   amount,
@@ -8,7 +9,7 @@ import {
   requireParcel,
 } from "../_shared/evidence.ts";
 export function buildHandler(deps: Dependencies) {
-  return protect("god-mode-dd-worker", "POST", async (req, sb) => {
+  const protectedHandler = protect("god-mode-dd-worker", "POST", async (req, sb) => {
     const deadline = Date.now() + 25000;
     const J = (url: string) => gis(url, deps.fetch ?? fetch, deadline);
     const optionalGIS = async (url: string) => {
@@ -430,4 +431,14 @@ export function buildHandler(deps: Dependencies) {
       },
     );
   }, deps);
+  return async (req: Request): Promise<Response> => {
+    if (req.method === "POST") {
+      try { assertDbWritesAuthorized(deps.env); }
+      catch (error) {
+        if (error instanceof WriteAuthorizationDenied) return json({ ok: false, error: error.code }, 403);
+        throw error;
+      }
+    }
+    return protectedHandler(req);
+  };
 }

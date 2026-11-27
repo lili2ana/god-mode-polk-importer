@@ -280,14 +280,14 @@ def load_dataset(conn, source_url, product_id, archive_sha256, frame, columns):
     return dataset_id,len(rows)
 
 
-def run_local_intersection(conn, dataset_id, limit=25):
+def run_local_intersection(conn, dataset_id, limit=25, after='', return_cursor=False):
     from psycopg2.extras import Json,execute_values
     with conn.cursor() as cur:
         cur.execute('''SELECT parcel_id,extensions.ST_AsBinary(geom)
           FROM god_mode_ops.lee_parcel_geometry_postgis p
-          WHERE NOT EXISTS (SELECT 1 FROM god_mode_ops.lee_parcel_fema_intersections e
+          WHERE p.parcel_id > %s AND NOT EXISTS (SELECT 1 FROM god_mode_ops.lee_parcel_fema_intersections e
                             WHERE e.parcel_id=p.parcel_id)
-          ORDER BY parcel_id LIMIT %s''',(limit,))
+          ORDER BY parcel_id LIMIT %s''',(after,limit))
         candidates=cur.fetchall()
         cur.execute("SELECT source_url,load_status FROM god_mode_ops.fema_nfhl_static_datasets WHERE dataset_id=%s",(dataset_id,))
         meta=cur.fetchone()
@@ -324,7 +324,8 @@ def run_local_intersection(conn, dataset_id, limit=25):
                   endpoint_verified=true,block_reason=NULL,updated_at=now()
               WHERE source_name='FEMA_NFHL' ''')
     conn.commit()
-    return len(candidates),len(rows),incomplete
+    result = (len(candidates),len(rows),incomplete)
+    return (*result, candidates[-1][0] if candidates else after) if return_cursor else result
 
 
 def main(argv=None):
@@ -335,6 +336,7 @@ def main(argv=None):
     p.add_argument('--write',action='store_true',help='Allow writing to staging only')
     p.add_argument('--intersect-only',action='store_true',help='Use an already VALIDATED local FEMA dataset')
     p.add_argument('--intersect-limit',type=int,default=25)
+    p.add_argument('--scan-all',action='store_true',help='Advance through all cached parcels in bounded batches')
     args=p.parse_args(argv)
     if not 1<=args.intersect_limit<=500:
         p.error('--intersect-limit must be 1..500')
@@ -375,7 +377,13 @@ def main(argv=None):
         if not args.write:
             print('DRY RUN ONLY: No local intersections persisted.')
             return 0
-        attempted,saved,unverified=run_local_intersection(conn,dataset_id,args.intersect_limit)
+        attempted=saved=unverified=0
+        cursor=''
+        while True:
+            a,b,c,cursor=run_local_intersection(conn,dataset_id,args.intersect_limit,after=cursor,return_cursor=True)
+            attempted+=a; saved+=b; unverified+=c
+            if not args.scan_all or a < args.intersect_limit:
+                break
         print(f'Local PostGIS ST_Intersects attempted={attempted}, verified={saved}, incomplete_coverage={unverified}')
         print('No ownership, wetlands, recorded access, delinquency, qualification or outreach changes.')
         return 0 if unverified==0 else 1

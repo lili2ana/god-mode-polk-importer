@@ -285,6 +285,15 @@ def send_webhook(url, kind, message):
             raise RuntimeError("Webhook delivery returned non-success status")
 
 
+SMOKE_MESSAGE = "God Mode CI Watch — TEST ONLY: controlled GitHub-to-Slack webhook delivery check. No property, qualification or database change."
+
+
+def webhook_smoke(url, kind):
+    if kind != "slack" or urllib.parse.urlsplit(url).scheme != "https" or urllib.parse.urlsplit(url).hostname != "hooks.slack.com":
+        raise ValueError("Smoke test requires approved Slack HTTPS webhook")
+    send_webhook(url, kind, SMOKE_MESSAGE)
+
+
 def load_previous_state():
     if not STATE_FILE.exists():
         return None

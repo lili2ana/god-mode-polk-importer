@@ -84,34 +84,54 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      - name: One-time Slack smoke test (separate from monitoring snapshot)
+      - name: Check smoke attempt history
+        id: smoke_gate
         if: github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ github.token }}
-          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
-          ALERT_WEBHOOK_KIND: ${{ vars.ALERT_WEBHOOK_KIND }}
         shell: bash
         run: |
           set -euo pipefail
-          marker=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=god-mode-webhook-smoke-v1&per_page=100" --jq '[.artifacts[] | select(.expired == false)] | length')
-          if [[ "$marker" != 0 ]]; then
-            echo 'Smoke test already recorded; skipping.'
-            exit 0
+          count=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=god-mode-webhook-smoke-v1-attempt&per_page=100" --jq '.artifacts | length' | awk '{s+=$1} END {print s+0}')
+          if [[ "$count" == 0 ]]; then
+            printf 'TEST ONLY attempt claimed; delivery not yet verified\n' > smoke-attempt.txt
+            echo 'send=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Existing attempt claim; no automatic resend.'
           fi
+
+      - name: Persist smoke attempt claim
+        if: steps.smoke_gate.outputs.send == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: god-mode-webhook-smoke-v1-attempt
+          path: smoke-attempt.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Deliver controlled Slack smoke test
+        if: steps.smoke_gate.outputs.send == 'true'
+        env:
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_WEBHOOK_KIND: ${{ vars.ALERT_WEBHOOK_KIND }}
+        run: |
           python - <<'PY'
           import monitor
           from pathlib import Path
-          with monitor.diagnostic_stage("webhook.smoke"):
+          try:
               url = monitor.require("ALERT_WEBHOOK_URL")
               monitor.webhook_smoke(url, monitor.webhook_kind(url))
+          except Exception:
+              raise SystemExit("Smoke delivery unverified; do not automatically retry.")
           Path("smoke-receipt.txt").write_text("Slack webhook HTTP success; TEST ONLY\n")
           print("Controlled Slack smoke test delivered.")
           PY
 
       - name: Record smoke delivery receipt
-        if: github.event_name == 'schedule' && hashFiles('smoke-receipt.txt') != ''
+        if: steps.smoke_gate.outputs.send == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: god-mode-webhook-smoke-v1
           path: smoke-receipt.txt
+          if-no-files-found: error
           retention-days: 90

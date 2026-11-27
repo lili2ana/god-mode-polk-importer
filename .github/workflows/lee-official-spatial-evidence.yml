@@ -1,0 +1,69 @@
+name: Lee staging official spatial evidence
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: lee-staging-official-spatial-evidence
+  cancel-in-progress: false
+jobs:
+  ingest:
+    if: github.repository == 'lili2ana/god-mode-polk-importer' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [fema, nwi]
+    env:
+      STAGING_SUPABASE_DB_URL: ${{ secrets.STAGING_SUPABASE_DB_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install spatial worker dependencies
+        run: pip install 'requests>=2.32,<3' 'psycopg2-binary>=2.9,<3' 'shapely>=2,<3' 'pyproj>=3,<4' 'geopandas>=1,<2' 'pyogrio>=0.10,<1'
+      - name: Verify staging target and install optional CA
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from monitor import safe_staging_dsn
+          from run_lee_parcel_geometry_worker import staging_dsn_is_safe
+          dsn = os.environ.get('STAGING_SUPABASE_DB_URL', '')
+          if not safe_staging_dsn(dsn) or not staging_dsn_is_safe(dsn):
+              raise SystemExit('Staging target rejected')
+          cert = os.environ.get('SUPABASE_DB_CA_CERT', '').strip()
+          if cert:
+              p = Path(os.environ['RUNNER_TEMP']) / 'spatial-ca.pem'
+              p.write_text(cert + '\n')
+              with open(os.environ['GITHUB_ENV'], 'a') as out:
+                  out.write('PGSSLROOTCERT=' + str(p) + '\n')
+          PY
+      - name: Import official archive if needed and compute bounded parcel evidence
+        env:
+          LAYER: ${{ matrix.layer }}
+        run: |
+          python - <<'PY'
+          import os, subprocess, sys
+          from contextlib import closing
+          from run_lee_nwi_local_postgis import open_staging_connection
+          layer = os.environ['LAYER']
+          table, worker, args = {
+              'fema': ('fema_nfhl_static_datasets', 'run_lee_fema_static_postgis.py', ['--intersect-limit', '500', '--scan-all']),
+              'nwi': ('nwi_static_datasets', 'run_lee_nwi_local_postgis.py', ['--limit', '2710']),
+          }[layer]
+          with closing(open_staging_connection(os.environ['STAGING_SUPABASE_DB_URL'])) as conn:
+              conn.set_session(readonly=True)
+              with conn.cursor() as cur:
+                  cur.execute(f"SELECT EXISTS (SELECT 1 FROM god_mode_ops.{table} WHERE load_status='VALIDATED')")
+                  cached = cur.fetchone()[0]
+          cmd = [sys.executable, '-u', worker, '--write', *args]
+          if cached:
+              cmd.append('--intersect-only')
+          subprocess.run(cmd, check=True)
+          PY

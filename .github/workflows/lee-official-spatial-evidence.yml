@@ -54,7 +54,7 @@ jobs:
           from run_lee_nwi_local_postgis import open_staging_connection
           layer = os.environ['LAYER']
           table, worker, args = {
-              'fema': ('fema_nfhl_static_datasets', 'run_lee_fema_static_postgis.py', ['--intersect-limit', '500']),
+              'fema': ('fema_nfhl_static_datasets', 'run_lee_fema_static_postgis.py', ['--intersect-limit', '500', '--scan-all']),
               'nwi': ('nwi_static_datasets', 'run_lee_nwi_local_postgis.py', ['--limit', '2710']),
           }[layer]
           with closing(open_staging_connection(os.environ['STAGING_SUPABASE_DB_URL'])) as conn:

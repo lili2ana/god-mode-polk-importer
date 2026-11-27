@@ -83,3 +83,35 @@ jobs:
           path: state/monitor-state.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: One-time Slack smoke test (separate from monitoring snapshot)
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          ALERT_WEBHOOK_KIND: ${{ vars.ALERT_WEBHOOK_KIND }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=god-mode-webhook-smoke-v1&per_page=100" --jq '[.artifacts[] | select(.expired == false)] | length')
+          if [[ "$marker" != 0 ]]; then
+            echo 'Smoke test already recorded; skipping.'
+            exit 0
+          fi
+          python - <<'PY'
+          import monitor
+          from pathlib import Path
+          with monitor.diagnostic_stage("webhook.smoke"):
+              url = monitor.require("ALERT_WEBHOOK_URL")
+              monitor.webhook_smoke(url, monitor.webhook_kind(url))
+          Path("smoke-receipt.txt").write_text("Slack webhook HTTP success; TEST ONLY\n")
+          print("Controlled Slack smoke test delivered.")
+          PY
+
+      - name: Record smoke delivery receipt
+        if: github.event_name == 'schedule' && hashFiles('smoke-receipt.txt') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: god-mode-webhook-smoke-v1
+          path: smoke-receipt.txt
+          retention-days: 90

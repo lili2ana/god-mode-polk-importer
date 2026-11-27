@@ -150,4 +150,25 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(any('title_access_verified' in s and 'LIMIT 0' in s for s in statements))
 
 
+
+class SmokeTests(unittest.TestCase):
+    def test_smoke_is_explicit_and_slack_only(self):
+        import monitor
+        from unittest.mock import patch
+        with patch.object(monitor, 'send_webhook') as send:
+            monitor.webhook_smoke('https://hooks.slack.com/services/test', 'slack')
+            send.assert_called_once_with('https://hooks.slack.com/services/test', 'slack', monitor.SMOKE_MESSAGE)
+            self.assertIn('TEST ONLY', monitor.SMOKE_MESSAGE)
+            with self.assertRaises(ValueError):
+                monitor.webhook_smoke('https://discord.com/api/webhooks/test', 'discord')
+            self.assertEqual(1, send.call_count)
+
+    def test_smoke_does_not_touch_snapshot_or_database(self):
+        import monitor
+        from unittest.mock import patch
+        with patch.object(monitor, 'send_webhook'), patch.object(monitor, 'save_state') as save, patch.object(monitor, 'check_supabase') as db:
+            monitor.webhook_smoke('https://hooks.slack.com/services/test', 'slack')
+            save.assert_not_called()
+            db.assert_not_called()
+
 if __name__=='__main__':unittest.main()

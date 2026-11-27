@@ -171,4 +171,13 @@ class SmokeTests(unittest.TestCase):
             save.assert_not_called()
             db.assert_not_called()
 
+
+    def test_smoke_claim_is_uploaded_before_delivery(self):
+        from pathlib import Path
+        workflow = (Path(__file__).resolve().parents[1] / '.github/workflows/god-mode-ci-watch.yml').read_text()
+        self.assertIn('god-mode-webhook-smoke-v1-attempt', workflow)
+        self.assertLess(workflow.index('name: Persist smoke attempt claim'), workflow.index('name: Deliver controlled Slack smoke test'))
+        self.assertIn("steps.smoke_gate.outputs.send == 'true'", workflow)
+        self.assertIn('if-no-files-found: error', workflow)
+
 if __name__=='__main__':unittest.main()
